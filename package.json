@@ -3,10 +3,13 @@
   "version": "3.0.0",
   "description": "GHSniper Web — Server-side GrubHub block sniper",
   "main": "dist/server.js",
+  "engines": {
+    "node": "20.x"
+  },
   "scripts": {
     "dev": "tsx watch src/server.ts",
     "dev:gc": "node --expose-gc -e \"require('tsx/cjs');require('./src/server.ts')\"",
-    "build": "tsc",
+    "build": "npx tsc",
     "start": "node --expose-gc dist/server.js",
     "prod": "npm run build && pm2 start ecosystem.config.js --node-args=\"--expose-gc\"",
     "logs": "pm2 logs ghsniper",

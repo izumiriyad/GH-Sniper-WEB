@@ -1,6 +1,6 @@
 [build]
 builder = "NIXPACKS"
-buildCommand = "npm install && npm run build"
+buildCommand = "echo 'Skipping build, pre-built dist folder is already present'"
 
 [deploy]
 startCommand = "npm run start"

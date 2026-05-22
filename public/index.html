@@ -1,0 +1,405 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>GHSniper Web v3 — NYC Edition</title>
+  <style>
+    *{margin:0;padding:0;box-sizing:border-box}
+    body{font-family:'Segoe UI',system-ui,sans-serif;background:#0a0e17;color:#e0e6ed;min-height:100vh}
+    .header{background:linear-gradient(135deg,#1a1f2e,#0d1117);border-bottom:1px solid #1e293b;padding:14px 24px;display:flex;align-items:center;justify-content:space-between}
+    .header h1{font-size:20px;background:linear-gradient(90deg,#ff6600,#ff9500);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+    .badge{background:#00ff88;color:#000;font-size:10px;padding:2px 8px;border-radius:10px;font-weight:700}
+    .badge-warn{background:#ff9500}
+    .container{max-width:1400px;margin:0 auto;padding:16px}
+    .grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+    .grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px}
+    @media(max-width:900px){.grid,.grid3{grid-template-columns:1fr}}
+    .card{background:#111827;border:1px solid #1e293b;border-radius:12px;padding:16px;margin-bottom:0}
+    .card h2{font-size:13px;color:#ff6600;margin-bottom:10px;text-transform:uppercase;letter-spacing:1px}
+    .card h3{font-size:12px;color:#94a3b8;margin:10px 0 6px}
+    input,textarea,select{width:100%;background:#0d1117;border:1px solid #1e293b;color:#e0e6ed;padding:8px 10px;border-radius:6px;font-size:12px;margin-bottom:8px;font-family:inherit}
+    input:focus,textarea:focus{border-color:#ff6600;outline:none}
+    textarea{resize:vertical;min-height:50px;font-family:'Consolas',monospace;font-size:11px}
+    button{padding:8px 16px;border:none;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;transition:all .15s}
+    button:hover{transform:translateY(-1px);filter:brightness(1.1)}
+    .btn-primary{background:linear-gradient(135deg,#ff6600,#ff9500);color:#000}
+    .btn-success{background:#00ff88;color:#000}
+    .btn-danger{background:#ff3355;color:#fff}
+    .btn-secondary{background:#1e293b;color:#94a3b8}
+    .btn-sm{padding:5px 10px;font-size:10px}
+    .btn-telegram{background:#0088cc;color:#fff}
+    .account-row{background:#0d1117;border:1px solid #1e293b;border-radius:8px;padding:10px;margin-bottom:6px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:6px}
+    .account-email{color:#e0e6ed;font-weight:600;font-size:12px}
+    .account-status{font-size:10px;padding:2px 8px;border-radius:10px;font-weight:600}
+    .status-active{background:rgba(0,255,136,.15);color:#00ff88}
+    .status-expired{background:rgba(255,51,85,.15);color:#ff3355}
+    .status-sniping{background:rgba(255,102,0,.15);color:#ff6600;animation:pulse 1.5s infinite}
+    @keyframes pulse{0%,100%{opacity:1}50%{opacity:.5}}
+    .log-box{background:#0a0e17;border:1px solid #1e293b;border-radius:6px;padding:10px;max-height:280px;overflow-y:auto;font-family:'Consolas',monospace;font-size:10px;line-height:1.5}
+    .log-line{color:#94a3b8}.log-line.grab{color:#00ff88;font-weight:600}.log-line.error{color:#ff3355}.log-line.info{color:#ff9500}
+    .stats-row{display:flex;gap:12px;margin-bottom:16px;flex-wrap:wrap}
+    .stat{background:#111827;border:1px solid #1e293b;border-radius:8px;padding:10px 14px;flex:1;min-width:80px;text-align:center}
+    .stat .num{font-size:22px;font-weight:700;color:#ff6600}
+    .stat .label{font-size:9px;color:#64748b;text-transform:uppercase;margin-top:2px}
+    .block-row{background:#0d1117;border:1px solid #1e293b;border-radius:6px;padding:6px 10px;margin-bottom:3px;display:flex;justify-content:space-between;align-items:center;font-size:11px}
+    .block-open{border-left:3px solid #00ff88}.block-full{border-left:3px solid #64748b}.block-assigned{border-left:3px solid #ff6600}
+    .fullwidth{grid-column:1/-1}
+    .flex-row{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+    .mt-8{margin-top:8px}.mb-8{margin-bottom:8px}
+    .text-dim{color:#64748b;font-size:10px}
+    .text-green{color:#00ff88}.text-red{color:#ff3355}.text-orange{color:#ff9500}
+    .divider{border:none;border-top:1px solid #1e293b;margin:12px 0}
+    .tab-row{display:flex;gap:4px;margin-bottom:12px}
+    .tab{padding:6px 14px;border-radius:6px 6px 0 0;font-size:11px;cursor:pointer;border:1px solid #1e293b;border-bottom:none;background:#0d1117;color:#94a3b8}
+    .tab.active{background:#111827;color:#ff6600;border-color:#ff6600;border-bottom:1px solid #111827}
+    .tab-content{display:none}.tab-content.active{display:block}
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div class="flex-row"><h1>⚡ GHSniper Web v3</h1><span class="badge">NYC EDITION</span></div>
+    <div class="flex-row"><span class="text-dim" id="clock"></span><span class="badge badge-warn" id="dropBadge"></span></div>
+  </div>
+
+  <div class="container">
+    <div class="stats-row">
+      <div class="stat"><div class="num" id="statAccounts">0</div><div class="label">Accounts</div></div>
+      <div class="stat"><div class="num" id="statSniping">0</div><div class="label">Sniping</div></div>
+      <div class="stat"><div class="num" id="statGrabs">0</div><div class="label">Grabs</div></div>
+      <div class="stat"><div class="num" id="statDrop">--</div><div class="label">Next Drop</div></div>
+      <div class="stat"><div class="num" id="statPeak">--</div><div class="label">Next Peak</div></div>
+      <div class="stat"><div class="num" id="statUptime">0s</div><div class="label">Uptime</div></div>
+    </div>
+
+    <!-- Tabs -->
+    <div class="tab-row">
+      <div class="tab active" onclick="switchTab('main')">Dashboard</div>
+      <div class="tab" onclick="switchTab('settings')">Settings</div>
+      <div class="tab" onclick="switchTab('logs')">Logs</div>
+    </div>
+
+    <!-- MAIN TAB -->
+    <div class="tab-content active" id="tab-main">
+      <div class="grid">
+        <!-- Add Account -->
+        <div class="card">
+          <h2>➕ Add Account</h2>
+          <input type="email" id="addEmail" placeholder="GH Driver Email">
+          <input type="text" id="addToken" placeholder="Bearer Access Token (from Storm Sniffer)">
+          <input type="text" id="addRefresh" placeholder="Refresh Token (for 24/7 auto-renew)">
+          <button class="btn-primary" onclick="addAccount()">Add Account</button>
+          <p class="text-dim mt-8">Paste Bearer token from Storm Sniffer / HTTP Canary. Refresh token enables auto-renew for weeks.</p>
+        </div>
+
+        <!-- Accounts -->
+        <div class="card">
+          <h2>👤 Accounts</h2>
+          <div id="accountsList"><p class="text-dim">No accounts</p></div>
+        </div>
+
+        <!-- Sniper Control -->
+        <div class="card fullwidth">
+          <h2>🎯 JOB:PICKUP — Continuous Sniper</h2>
+          <div class="flex-row mb-8">
+            <select id="sniperEmail" style="flex:1"><option value="">Select Account</option></select>
+            <input type="number" id="sniperInterval" value="3000" style="width:80px" title="Polling interval (ms)">
+            <button class="btn-success" onclick="startSniperBtn()">▶ START</button>
+            <button class="btn-danger" onclick="stopSniperBtn()">⏹ STOP</button>
+            <button class="btn-primary" onclick="runInstant()">⚡ INSTANT BYPASS</button>
+          </div>
+          <div class="log-box" id="sniperLog"><div class="log-line text-dim">Select account → START</div></div>
+        </div>
+
+        <!-- Blocks -->
+        <div class="card">
+          <h2>📦 Market Blocks</h2>
+          <div class="flex-row mb-8">
+            <button class="btn-secondary btn-sm" onclick="loadBlocks()">Refresh</button>
+            <span class="text-dim" id="blockSummary"></span>
+          </div>
+          <div id="blocksList" style="max-height:250px;overflow-y:auto"><p class="text-dim">Select account</p></div>
+        </div>
+
+        <!-- Grabs -->
+        <div class="card">
+          <h2>🏆 Grabs</h2>
+          <div id="grabsList" style="max-height:300px;overflow-y:auto"><p class="text-dim">No grabs yet</p></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- SETTINGS TAB -->
+    <div class="tab-content" id="tab-settings">
+      <div class="grid3">
+        <!-- Telegram -->
+        <div class="card">
+          <h2>📱 Telegram Alerts</h2>
+          <input type="text" id="tgBotToken" placeholder="Bot Token (from @BotFather)">
+          <input type="text" id="tgChatId" placeholder="Chat ID">
+          <div class="flex-row">
+            <button class="btn-telegram" onclick="saveTelegram()">Save & Connect</button>
+            <button class="btn-secondary btn-sm" onclick="testTelegram()">Test</button>
+          </div>
+          <p class="text-dim mt-8">Get instant notifications when blocks are grabbed. Create bot via @BotFather on Telegram.</p>
+        </div>
+
+        <!-- Schedule Release -->
+        <div class="card">
+          <h2>📅 Schedule Release Sniper</h2>
+          <p class="text-dim mb-8">Auto-fires at midnight when new schedule drops:</p>
+          <p class="text-dim">• Premier → Thursday midnight</p>
+          <p class="text-dim">• Pro → Friday midnight</p>
+          <p class="text-dim mb-8">• Partner → Saturday midnight</p>
+          <select id="releaseEmail" style="margin-bottom:8px"><option value="">Select Account</option></select>
+          <select id="releaseLevel">
+            <option value="premier">Premier (Thursday)</option>
+            <option value="pro">Pro (Friday)</option>
+            <option value="partner">Partner (Saturday)</option>
+          </select>
+          <button class="btn-primary" onclick="setRelease()">Enable Release Sniper</button>
+          <div id="releaseStatus" class="mt-8"></div>
+        </div>
+
+        <!-- NYC Intelligence -->
+        <div class="card">
+          <h2>🗽 NYC Intelligence</h2>
+          <div id="nycInfo"><p class="text-dim">Loading...</p></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- LOGS TAB -->
+    <div class="tab-content" id="tab-logs">
+      <div class="card">
+        <h2>📋 All Logs</h2>
+        <div class="log-box" id="allLogs" style="max-height:500px"><div class="log-line text-dim">Loading...</div></div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const API='';
+    let pollTimer=null, startTime=Date.now();
+
+    // Tabs
+    function switchTab(name){
+      document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
+      document.querySelectorAll('.tab-content').forEach(t=>t.classList.remove('active'));
+      document.querySelector('.tab[onclick*="'+name+'"]').classList.add('active');
+      document.getElementById('tab-'+name).classList.add('active');
+      if(name==='settings'){loadTelegram();loadNYC();loadReleaseAccounts();}
+      if(name==='logs') loadAllLogs();
+    }
+
+    // Clock + drop window
+    setInterval(()=>{
+      const now=new Date();
+      document.getElementById('clock').textContent=now.toLocaleTimeString()+' EST';
+      const min=now.getMinutes();
+      let drop='',cls='';
+      if(min>=13&&min<=16){drop='IN :13-:16 NOW!';cls='text-green';}
+      else if(min>=43&&min<=46){drop='IN :43-:46 NOW!';cls='text-green';}
+      else if(min<13){drop=(13-min)+'m→:13';cls='text-orange';}
+      else if(min<43){drop=(43-min)+'m→:43';cls='text-orange';}
+      else{drop=(73-min)+'m→:13';cls='text-orange';}
+      document.getElementById('statDrop').textContent=drop;
+      document.getElementById('statDrop').className='num '+cls;
+      document.getElementById('dropBadge').textContent='Drop: '+drop;
+      const up=Math.round((Date.now()-startTime)/1000);
+      const h=Math.floor(up/3600),m=Math.floor((up%3600)/60),s=up%60;
+      document.getElementById('statUptime').textContent=(h?h+'h ':'')+(m?m+'m ':'')+s+'s';
+    },1000);
+
+    async function api(method,url,body){
+      const opts={method,headers:{'Content-Type':'application/json'}};
+      if(body)opts.body=JSON.stringify(body);
+      try{const r=await fetch(API+url,opts);return r.json();}catch(e){return{error:e.message};}
+    }
+
+    // Accounts
+    async function loadAccounts(){
+      const data=await api('GET','/api/accounts');
+      if(!Array.isArray(data))return;
+      const list=document.getElementById('accountsList');
+      const sel=document.getElementById('sniperEmail');
+      const prev=sel.value;
+      sel.innerHTML='<option value="">Select Account</option>';
+      let sniping=0;
+      if(!data.length){list.innerHTML='<p class="text-dim">No accounts</p>';return;}
+      list.innerHTML=data.map(a=>{
+        const isSnipe=a.sniper?.running;if(isSnipe)sniping++;
+        const sc=isSnipe?'status-sniping':a.status==='active'?'status-active':'status-expired';
+        const st=isSnipe?'SNIPING ('+((a.sniper?.cycles)||0)+')':a.status.toUpperCase();
+        return '<div class="account-row"><div><span class="account-email">'+a.email+'</span> <span class="account-status '+sc+'">'+st+'</span></div><div class="flex-row">'+
+          '<button class="btn-secondary btn-sm" onclick="refreshTokenBtn(\''+a.email+'\')">🔄</button>'+
+          '<button class="btn-danger btn-sm" onclick="deleteAccount(\''+a.email+'\')">✕</button></div></div>';
+      }).join('');
+      data.forEach(a=>{const o=document.createElement('option');o.value=a.email;o.textContent=a.email;sel.appendChild(o);});
+      if(prev)sel.value=prev;
+      document.getElementById('statAccounts').textContent=data.length;
+      document.getElementById('statSniping').textContent=sniping;
+    }
+
+    async function addAccount(){
+      const email=document.getElementById('addEmail').value.trim();
+      const token=document.getElementById('addToken').value.trim();
+      const refresh=document.getElementById('addRefresh').value.trim();
+      if(!email||!token)return alert('Email and token required');
+      await api('POST','/api/accounts',{email,accessToken:token,refreshToken:refresh});
+      document.getElementById('addEmail').value='';document.getElementById('addToken').value='';document.getElementById('addRefresh').value='';
+      loadAccounts();
+    }
+
+    async function deleteAccount(email){if(!confirm('Delete '+email+'?'))return;await api('DELETE','/api/accounts/'+email);loadAccounts();}
+    async function refreshTokenBtn(email){const r=await api('POST','/api/accounts/'+email+'/refresh');alert(r.message||r.error);loadAccounts();}
+
+    // Sniper
+    async function startSniperBtn(){
+      const email=document.getElementById('sniperEmail').value;if(!email)return alert('Select account');
+      const interval=parseInt(document.getElementById('sniperInterval').value)||3000;
+      const r=await api('POST','/api/sniper/'+email+'/start',{intervalMs:interval});
+      document.getElementById('sniperLog').innerHTML='<div class="log-line info">'+r.message+'</div>';
+      loadAccounts();startPolling(email);
+    }
+
+    async function stopSniperBtn(){
+      const email=document.getElementById('sniperEmail').value;if(!email)return alert('Select account');
+      const r=await api('POST','/api/sniper/'+email+'/stop');
+      document.getElementById('sniperLog').innerHTML+='<div class="log-line error">'+r.message+'</div>';
+      loadAccounts();if(pollTimer)clearInterval(pollTimer);
+    }
+
+    function startPolling(email){
+      if(pollTimer)clearInterval(pollTimer);
+      pollTimer=setInterval(async()=>{
+        const s=await api('GET','/api/sniper/'+email+'/status');
+        const box=document.getElementById('sniperLog');
+        if(s.logs?.length){
+          box.innerHTML=s.logs.map(l=>{
+            const c=l.includes('GRABBED')?'grab':l.includes('Error')||l.includes('EXPIRED')?'error':l.includes('OPEN')||l.includes('open')?'info':'';
+            return '<div class="log-line '+c+'">'+l+'</div>';
+          }).join('');
+          box.scrollTop=box.scrollHeight;
+        }
+        if(!s.running&&pollTimer){clearInterval(pollTimer);loadAccounts();}
+      },2000);
+    }
+
+    async function runInstant(){
+      const email=document.getElementById('sniperEmail').value;if(!email)return alert('Select account');
+      const box=document.getElementById('sniperLog');
+      box.innerHTML='<div class="log-line info">⚡ Running instant bypass (4 strategies)...</div>';
+      const r=await api('POST','/api/instant/'+email);
+      box.innerHTML=(r.logs||[]).map(l=>{
+        const c=l.includes('OK')||l.includes('Grabbed')?'grab':l.includes('FAIL')||l.includes('error')?'error':'info';
+        return '<div class="log-line '+c+'">'+l+'</div>';
+      }).join('');
+      if(r.results){
+        box.innerHTML+='<hr class="divider"><div class="log-line" style="color:#ff6600;font-weight:600">RESULTS:</div>';
+        r.results.forEach(s=>{
+          box.innerHTML+='<div class="log-line '+(s.success?'grab':'error')+'">'+(s.success?'✅':'❌')+' ['+s.strategy+'] '+s.message+'</div>';
+        });
+      }
+      box.scrollTop=box.scrollHeight;loadAccounts();
+    }
+
+    // Blocks
+    async function loadBlocks(){
+      const email=document.getElementById('sniperEmail').value;if(!email)return;
+      const data=await api('GET','/api/blocks/'+email);
+      if(data.error){document.getElementById('blocksList').innerHTML='<p class="text-dim text-red">'+data.error+'</p>';return;}
+      document.getElementById('blockSummary').textContent=data.total+' total, '+data.open+' open, '+data.assigned+' assigned';
+      const now=new Date();
+      const html=(data.blocks||[]).filter(b=>new Date(b.start)>now).slice(0,25).map(b=>{
+        const cls=b.type==='ASSIGNED'?'block-assigned':b.couriers_needed>0?'block-open':'block-full';
+        const time=new Date(b.start).toLocaleTimeString()+' - '+new Date(b.end).toLocaleTimeString();
+        const grab=b.couriers_needed>0&&b.type!=='ASSIGNED'?'<button class="btn-success btn-sm" onclick="grabBlock(\''+email+'\',\''+b.id+'\')">GRAB</button>':b.type==='ASSIGNED'?'<span class="text-orange">YOURS</span>':'';
+        return '<div class="block-row '+cls+'"><span>'+time+' ('+b.couriers_needed+' slots)</span>'+grab+'</div>';
+      }).join('');
+      document.getElementById('blocksList').innerHTML=html||'<p class="text-dim">No future blocks</p>';
+    }
+
+    async function grabBlock(email,blockId){
+      const r=await api('POST','/api/blocks/'+email+'/pickup/'+blockId);
+      alert(r.success?'✅ GRABBED! Check GH app.':'❌ Failed: '+r.detail);loadBlocks();
+    }
+
+    // Grabs
+    async function loadGrabs(){
+      const data=await api('GET','/api/grabs?limit=30');
+      if(!Array.isArray(data))return;
+      document.getElementById('statGrabs').textContent=data.length;
+      document.getElementById('grabsList').innerHTML=data.length?data.map(g=>
+        '<div class="block-row block-assigned"><span>'+g.email+' — '+g.strategy+'</span><span class="text-green">'+new Date(g.grabbed_at).toLocaleString()+'</span></div>'
+      ).join(''):'<p class="text-dim">No grabs yet</p>';
+    }
+
+    // Telegram
+    async function loadTelegram(){
+      const d=await api('GET','/api/telegram');
+      if(d.botToken)document.getElementById('tgBotToken').placeholder='Configured: '+d.botToken;
+      if(d.chatId)document.getElementById('tgChatId').placeholder='Chat: '+d.chatId;
+    }
+    async function saveTelegram(){
+      const t=document.getElementById('tgBotToken').value.trim(),c=document.getElementById('tgChatId').value.trim();
+      if(!t||!c)return alert('Both fields required');
+      await api('POST','/api/telegram',{botToken:t,chatId:c});alert('Telegram connected! Check your chat.');
+    }
+    async function testTelegram(){await api('POST','/api/telegram/test');alert('Test sent!');}
+
+    // Schedule Release
+    function loadReleaseAccounts(){
+      const sel=document.getElementById('releaseEmail');
+      const main=document.getElementById('sniperEmail');
+      sel.innerHTML=main.innerHTML;
+    }
+    async function setRelease(){
+      const email=document.getElementById('releaseEmail').value;
+      const level=document.getElementById('releaseLevel').value;
+      if(!email)return alert('Select account');
+      const r=await api('POST','/api/schedule-release',{email,driverLevel:level});
+      document.getElementById('releaseStatus').innerHTML='<p class="text-green">✅ '+r.message+'</p>';
+    }
+
+    // NYC Intelligence
+    async function loadNYC(){
+      const d=await api('GET','/api/nyc');
+      let html='';
+      if(d.nextPeakDrop){
+        html+='<p class="text-orange mb-8">🔥 Next peak: <b>'+d.nextPeakDrop.time+'</b> ('+d.nextPeakDrop.minutesAway+'min) — '+d.nextPeakDrop.reason+'</p>';
+        document.getElementById('statPeak').textContent=d.nextPeakDrop.minutesAway+'m';
+      }else{
+        html+='<p class="text-dim mb-8">No peak drop within 2 hours</p>';
+      }
+      html+='<h3>Drop Windows (every 30min)</h3>';
+      (d.intelligence?.noShowWindows||[]).forEach(w=>{html+='<p class="text-dim">:'+w.offsetMin+'-:'+w.offsetMax+' — '+w.reason+'</p>';});
+      html+='<h3>NYC Peak Times (EST)</h3>';
+      (d.intelligence?.peakDropTimes||[]).forEach(p=>{html+='<p class="text-dim">'+p.hour+':'+('0'+p.min).slice(-2)+' — '+p.reason+'</p>';});
+      html+='<h3>Rate Limits</h3>';
+      const rl=d.rateLimits||{};
+      if(Object.keys(rl).length===0)html+='<p class="text-green">All clear</p>';
+      else Object.entries(rl).forEach(([k,v])=>{html+='<p class="'+(v.blocked?'text-red':'text-dim')+'">'+k.split('.com')[0]+': '+(v.blocked?'BLOCKED '+v.blockedFor+'ms':'OK ('+v.count+')')+'</p>';});
+      document.getElementById('nycInfo').innerHTML=html;
+    }
+
+    // All Logs
+    async function loadAllLogs(){
+      const data=await api('GET','/api/logs?limit=100');
+      if(!Array.isArray(data))return;
+      document.getElementById('allLogs').innerHTML=data.map(l=>{
+        const c=l.status==='grabbed'?'grab':l.status==='error'?'error':l.action.includes('START')?'info':'';
+        return '<div class="log-line '+c+'">['+new Date(l.created_at).toLocaleString()+'] '+l.email+' | '+l.action+' | '+(l.message||'')+(l.http_code?' (HTTP '+l.http_code+')':'')+'</div>';
+      }).join('')||'<div class="log-line text-dim">No logs yet</div>';
+    }
+
+    // Auto-poll sniper on account select
+    document.getElementById('sniperEmail').addEventListener('change',e=>{if(e.target.value){startPolling(e.target.value);loadBlocks();}});
+
+    // Init
+    loadAccounts();loadGrabs();
+    setInterval(loadAccounts,10000);
+    setInterval(loadGrabs,15000);
+  </script>
+</body>
+</html>

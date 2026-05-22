@@ -1,6 +1,6 @@
 [build]
 builder = "NIXPACKS"
-buildCommand = "npm rebuild && npm install --omit=dev"
+buildCommand = "npm install --omit=dev"
 
 [deploy]
 startCommand = "npm run start"

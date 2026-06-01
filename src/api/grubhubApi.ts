@@ -45,7 +45,7 @@ function getDeviceProfile(email: string) {
 }
 
 // Invalidate profile on 403/429 to force a new fingerprint
-function invalidateProfile(email: string) {
+export function invalidateProfile(email: string) {
   profileCache.delete(email);
 }
 
@@ -163,7 +163,7 @@ export interface Block {
 let serverTimeOffset = 0; // Tracks difference between local time and GH server time
 
 // Build headers for GH API
-function buildHeaders(email: string, accessToken: string): Record<string, string> {
+export function buildHeaders(email: string, accessToken: string): Record<string, string> {
   const p = getDeviceProfile(email);
   const ua = `GrubHub_Driver_Android/${APP_VERSION} (${p.brand} ${p.model}; Android ${p.os}; API ${p.api})`;
   

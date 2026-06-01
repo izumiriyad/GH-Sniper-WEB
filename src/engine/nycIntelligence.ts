@@ -3,7 +3,7 @@
 import axios from 'axios';
 import https from 'https';
 import DB from '../db/database';
-import { getBlocks, pickupBlock, refreshToken, isTokenExpiring, Block, API_ENDPOINTS, rawPickupBlock, getTrueTime, syncServerTime, getProxyStatus } from '../api/grubhubApi';
+import { getBlocks, pickupBlock, refreshToken, isTokenExpiring, Block, API_ENDPOINTS, rawPickupBlock, getTrueTime, syncServerTime, getProxyStatus, buildHeaders, getProxyAgent, invalidateProfile, rotateProxy } from '../api/grubhubApi';
 
 // Dedicated stealth agent for schedule release
 const releaseAgent = new https.Agent({
@@ -373,22 +373,9 @@ async function pollForAccount(
     return { grabs: 0, polls: 0 };
   }
   
-  // Build stealth headers
-  const headers: Record<string, string> = {
-    'Authorization': 'Bearer ' + acc.access_token,
-    'Content-Type': 'application/json',
-    'Accept': 'application/json',
-    'User-Agent': 'GrubHub_Driver_Android/5.32 (Samsung SM-S918B; Android 14; API 34)',
-    'x-app-version': '5.32',
-    'x-client-identifier': 'grubhubfordrivers_android_ff790a1b3307',
-    'x-locale': 'en-US',
-    'X-Network-Type': 'WIFI',
-    'X-Requested-With': 'com.grubhub.driver',
-    'X-Android-Package': 'com.grubhub.driver',
-    'Accept-Language': 'en-US,en;q=0.9',
-    'Accept-Encoding': 'identity',
-    'Connection': 'keep-alive',
-  };
+  // 🔥 v4.2: Use REAL buildHeaders (anti-fingerprint, px tokens, GPS spoof, device ID)
+  // This is what the regular sniper uses — schedule release must be identical
+  let headers = buildHeaders(email, acc.access_token);
   
   while (Date.now() < deadline) {
     polls++;
@@ -398,17 +385,26 @@ async function pollForAccount(
     if (polls % 200 === 0) {
       const secsLeft = Math.round((deadline - Date.now()) / 1000);
       console.log('[ScheduleRelease] ' + email + ' | Poll #' + polls + ' | ' + grabs + ' grabs | ' + secsLeft + 's left');
-      // Telegram heartbeat every 1000 polls (~50 sec)
       if (polls % 1000 === 0) {
         sendTelegram('💓 ' + email + ': Poll #' + polls + ' | ' + grabs + ' grabs | ' + secsLeft + 's remaining');
       }
     }
     
     try {
+      // 🔥 v4.2: Use getProxyAgent(email) — routes through residential proxy, not datacenter IP
+      const agent = getProxyAgent(email);
+      
       // Scan ALL subdomains simultaneously
       const scans = await Promise.all(ALL_BASES.map(base =>
-        axios.get(base + BLOCK_PATH, { headers, timeout: 3000, httpsAgent: releaseAgent, validateStatus: () => true })
+        axios.get(base + BLOCK_PATH, { headers, timeout: 3000, httpsAgent: agent, validateStatus: () => true })
           .then(res => {
+            // 🔥 v4.2: WAF evasion — rotate profile + proxy on block
+            if (res.status === 403 || res.status === 429) {
+              invalidateProfile(email);
+              rotateProxy(email);
+              console.log('[ScheduleRelease] WAF block on ' + base + ' (HTTP ' + res.status + '). Rotated profile+proxy.');
+              return [];
+            }
             if (res.status !== 200) return [];
             return extractBlocksSimple(res.data).filter(b =>
               b.couriers_needed > 0 &&
@@ -464,14 +460,15 @@ async function pollForAccount(
         }
       }
       
-      // Auto-refresh token mid-session every 500 polls
+      // Auto-refresh token + rebuild headers mid-session every 500 polls
       if (polls % 500 === 0 && isTokenExpiring(email)) {
         console.log('[ScheduleRelease] Mid-session token refresh for ' + email);
         const refreshed = await refreshToken(email);
         if (refreshed) {
           const newAcc = DB.getAccount(email);
           if (newAcc?.access_token) {
-            headers['Authorization'] = 'Bearer ' + newAcc.access_token;
+            // 🔥 v4.2: Rebuild FULL headers with new token (not just Authorization)
+            headers = buildHeaders(email, newAcc.access_token);
           }
         }
       }

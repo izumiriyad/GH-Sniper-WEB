@@ -405,6 +405,11 @@ async function pollForAccount(
               console.log('[ScheduleRelease] WAF block on ' + base + ' (HTTP ' + res.status + '). Rotated profile+proxy.');
               return [];
             }
+            // 🔥 v4.3: Handle session expiry mid-release
+            if (res.status === 401 || res.status === 462) {
+              console.log('[ScheduleRelease] TOKEN EXPIRED during release! Force refreshing...');
+              return 'TOKEN_EXPIRED' as any;
+            }
             if (res.status !== 200) return [];
             return extractBlocksSimple(res.data).filter(b =>
               b.couriers_needed > 0 &&
@@ -415,9 +420,48 @@ async function pollForAccount(
           .catch(() => [] as any[])
       ));
       
+      // 🔥 v4.3: Handle token expiry detected during scan
+      if (scans.some(s => s === 'TOKEN_EXPIRED')) {
+        console.log('[ScheduleRelease] Emergency token refresh mid-release');
+        const refreshed = await refreshToken(email);
+        if (refreshed) {
+          const newAcc = DB.getAccount(email);
+          if (newAcc?.access_token) {
+            headers = buildHeaders(email, newAcc.access_token);
+            console.log('[ScheduleRelease] Token refreshed. Resuming...');
+          }
+        }
+        await new Promise(r => setTimeout(r, intervalMs));
+        continue;
+      }
+      
       // De-duplicate across subdomains
-      const allOpen = scans.flat();
+      const allOpen = (scans as any[][]).flat();
       const unique = [...new Map(allOpen.map(b => [b.id, b])).values()];
+      
+      // 🔥 v4.3 SAFETY NET: If direct scan returns 0 blocks, fallback to getBlocks()
+      // getBlocks() is the PROVEN function that the regular sniper uses successfully
+      if (unique.length === 0 && polls % 100 === 0) {
+        try {
+          const fallbackBlocks = await getBlocks(email);
+          const now = new Date(getTrueTime());
+          const fallbackOpen = fallbackBlocks.filter(b =>
+            b.type !== 'DELETED' && b.type !== 'ASSIGNED' &&
+            b.couriers_needed > 0 &&
+            new Date(b.start) > now &&
+            !grabbedIds.has(b.id)
+          );
+          if (fallbackOpen.length > 0) {
+            console.log('[ScheduleRelease] 🔄 FALLBACK found ' + fallbackOpen.length + ' blocks via getBlocks()!');
+            sendTelegram('🔄 Fallback scan found <b>' + fallbackOpen.length + '</b> blocks!');
+            for (const block of fallbackOpen) {
+              unique.push({ id: block.id, start: block.start, end: block.end, type: block.type, couriers_needed: block.couriers_needed });
+            }
+          }
+        } catch (e: any) {
+          // getBlocks failure is non-fatal — direct scan continues
+        }
+      }
       
       if (unique.length > 0) {
         console.log('[ScheduleRelease] 🎯 ' + email + ': FOUND ' + unique.length + ' BLOCKS at poll #' + polls + '!');
@@ -467,10 +511,14 @@ async function pollForAccount(
         if (refreshed) {
           const newAcc = DB.getAccount(email);
           if (newAcc?.access_token) {
-            // 🔥 v4.2: Rebuild FULL headers with new token (not just Authorization)
             headers = buildHeaders(email, newAcc.access_token);
           }
         }
+      }
+      
+      // 🔥 v4.3: Trigger GC every 200 polls to prevent memory pressure during 10-min session
+      if (polls % 200 === 0 && global.gc) {
+        try { global.gc(); } catch {}
       }
       
     } catch (e: any) {

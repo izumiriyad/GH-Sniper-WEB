@@ -204,6 +204,23 @@ export function getTrueTime() {
   return Date.now() + serverTimeOffset;
 }
 
+// 🔥 v4: Export syncServerTime for connection warming
+export async function syncServerTime() {
+  try {
+    const res = await fastClient.head(BLOCK_PATH, { timeout: 3000, validateStatus: () => true });
+    if (res.headers) syncTimeDrift(res.headers);
+  } catch {}
+}
+
+// 🔥 v4: Export proxy status for dashboard
+export function getProxyStatus() {
+  return {
+    totalProxies: proxyList.length,
+    activeAssignments: proxyAgents.size,
+    proxyList: proxyList.map(p => p.replace(/\/\/.*:.*@/, '//*:*@')), // Mask credentials
+  };
+}
+
 // Ensure TCP No-Delay is applied to sockets as they are created
 httpsAgent.on('socket', (socket) => {
   socket.setNoDelay(true); // Disable Nagle's algorithm
@@ -732,15 +749,16 @@ export async function instantBypass(email: string, log: (m: string) => void): Pr
 }
 
 
-// 🔥 ALMIGHTY: HFT JIT WARMUP
-// Force V8 TurboFan to pre-compile the rawPickupBlock HTTP pathway into 
-// raw C++ machine code before the drop window ever hits.
+// 🔥 v4: HFT JIT WARMUP (Fixed — no more 10k failed HTTP requests)
+// V8 TurboFan optimizes functions after ~1000 calls. We call extractBlocks
+// and buildHeaders in a tight loop to trigger Tier-4 JIT compilation.
 if (!(global as any).__hft_warmed) {
   (global as any).__hft_warmed = true;
-  console.log('[HFT] Warming up V8 TurboFan Compiler for rawPickupBlock...');
-  for (let i = 0; i < 10000; i++) {
-    // 10,000 silent executions to trigger Tier-4 optimization
-    rawPickupBlock('warmup@test', 'warmup', {}, 'http://127.0.0.1:9').catch(() => {});
+  console.log('[HFT] Warming V8 TurboFan for hot paths...');
+  const fakeData = { blocks: [{ id: 'w', scheduled_start: '2025-01-01', scheduled_end: '2025-01-01', type: 'OPEN', couriers_needed: 1 }] };
+  for (let i = 0; i < 5000; i++) {
+    extractBlocks(fakeData);
+    buildHeaders('warmup@jit.test', 'fake_token_' + i);
   }
-  console.log('[HFT] JIT Compilation locked to Machine Code.');
+  console.log('[HFT] JIT Compilation locked to Machine Code (extractBlocks + buildHeaders optimized).');
 }

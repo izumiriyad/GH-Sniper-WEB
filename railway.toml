@@ -1,8 +1,10 @@
 [build]
-builder = "NIXPACKS"
-buildCommand = "npm install --omit=dev"
+builder = "nixpacks"
+buildCommand = "npm install && npx tsc"
 
 [deploy]
-startCommand = "npm run start"
+startCommand = "node --expose-gc --max-old-space-size=512 dist/server.js"
+healthcheckPath = "/api/health"
+healthcheckTimeout = 30
 restartPolicyType = "ON_FAILURE"
 restartPolicyMaxRetries = 10

@@ -1,22 +1,24 @@
-// Database layer — SQLite for accounts, tokens, logs
+// Database layer — SQLite for accounts, tokens, logs, schedule configs
 import Database from 'better-sqlite3';
 import path from 'path';
 import { v4 as uuid } from 'uuid';
+import fs from 'fs';
 
-const DB_PATH = path.join(__dirname, '..', '..', 'data', 'ghsniper.db');
+// Railway volume support: DATA_DIR env var or default to ./data
+const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, '..', '..', 'data');
+const DB_PATH = path.join(DATA_DIR, 'ghsniper.db');
 
 // Ensure data directory exists
-import fs from 'fs';
 fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
 
 const db = new Database(DB_PATH);
 db.pragma('journal_mode = WAL');
-db.pragma('wal_autocheckpoint = 0'); // 🔥 ALMIGHTY: Disable auto-checkpoint. We flush manually.
-db.pragma('mmap_size = 2147483648'); // 🔥 ALMIGHTY: 2GB memory map
-db.pragma('cache_size = -20000');    // 🔥 ALMIGHTY: 20MB page cache
-db.pragma('synchronous = OFF');      // 🔥 ALMIGHTY: Zero disk I/O blocking
-db.pragma('temp_store = MEMORY');    // 🔥 ALMIGHTY: Temp tables in RAM, not disk
-db.pragma('busy_timeout = 5000');    // 🔥 ALMIGHTY: 5s retry on SQLITE_BUSY instead of instant fail
+db.pragma('wal_autocheckpoint = 0');    // Manual checkpoint only
+db.pragma('mmap_size = 2147483648');    // 2GB memory map
+db.pragma('cache_size = -20000');       // 20MB page cache
+db.pragma('synchronous = NORMAL');     // 🔥 FIXED: Was OFF (corruption risk). NORMAL = safe + fast
+db.pragma('temp_store = MEMORY');       // Temp tables in RAM
+db.pragma('busy_timeout = 5000');       // 5s retry on SQLITE_BUSY
 db.pragma('foreign_keys = ON');
 
 // Create tables
@@ -59,7 +61,15 @@ db.exec(`
     grabbed_at INTEGER DEFAULT (strftime('%s','now') * 1000)
   );
 
-  -- 🔥 ALMIGHTY: Indexes for fast lookups on high-volume tables
+  -- 🔥 NEW: Persist schedule release configs across restarts
+  CREATE TABLE IF NOT EXISTS schedule_configs (
+    email TEXT PRIMARY KEY,
+    driver_level TEXT NOT NULL,
+    enabled INTEGER DEFAULT 1,
+    created_at INTEGER DEFAULT (strftime('%s','now') * 1000)
+  );
+
+  -- Indexes for fast lookups on high-volume tables
   CREATE INDEX IF NOT EXISTS idx_logs_email ON logs(email);
   CREATE INDEX IF NOT EXISTS idx_logs_created ON logs(created_at);
   CREATE INDEX IF NOT EXISTS idx_grabs_email ON grabs(email);
@@ -92,10 +102,13 @@ const stmts = {
   cleanupOldLogs: db.prepare(`DELETE FROM logs WHERE created_at < ?`),
   cleanupOldGrabs: db.prepare(`DELETE FROM grabs WHERE grabbed_at < ?`),
   resetSniperFlags: db.prepare(`UPDATE accounts SET sniper_running = 0`),
+  // Schedule config statements
+  upsertScheduleConfig: db.prepare(`INSERT OR REPLACE INTO schedule_configs (email, driver_level, enabled) VALUES (?, ?, 1)`),
+  getScheduleConfigs: db.prepare(`SELECT * FROM schedule_configs WHERE enabled = 1`),
+  deleteScheduleConfig: db.prepare(`DELETE FROM schedule_configs WHERE email = ?`),
 };
 
-// 🔥 ALMIGHTY: Batch write transaction for addLog — wraps single insert in implicit transaction
-// better-sqlite3 auto-wraps single statements in transactions, but explicit is faster for bursts
+// Batch write transaction for addLog
 const addLogBatch = db.transaction((entries: Array<{accountId: string; email: string; action: string; blockId: string | null; status: string | null; message: string | null; httpCode: number | null}>) => {
   for (const e of entries) {
     stmts.addLog.run(e.accountId, e.email, e.action, e.blockId, e.status, e.message, e.httpCode);
@@ -117,7 +130,14 @@ export interface AccountRow {
   updated_at: number;
 }
 
-// L1 Memory Cache for Zero-Latency Reads (bypasses SQLite I/O)
+export interface ScheduleConfigRow {
+  email: string;
+  driver_level: string;
+  enabled: number;
+  created_at: number;
+}
+
+// L1 Memory Cache for Zero-Latency Reads
 const accountCache = new Map<string, AccountRow>();
 
 export const DB = {
@@ -155,7 +175,7 @@ export const DB = {
 
   updateTokens(email: string, accessToken: string, refreshToken: string, expiresAt: number) {
     stmts.updateTokens.run(accessToken, refreshToken, expiresAt, Date.now(), email);
-    accountCache.delete(email); // Invalidate cache
+    accountCache.delete(email);
   },
 
   updateStatus(email: string, status: string) {
@@ -188,7 +208,6 @@ export const DB = {
     stmts.addLog.run(acc?.id || '', email, action, blockId || null, status || null, message || null, httpCode || null);
   },
 
-  // 🔥 ALMIGHTY: Batch insert logs in a single transaction (50x faster for bursts)
   addLogsBatch(entries: Array<{email: string; action: string; blockId?: string; status?: string; message?: string; httpCode?: number}>) {
     const mapped = entries.map(e => {
       const acc = accountCache.get(e.email) || stmts.getAccount.get(e.email) as AccountRow | undefined;
@@ -226,24 +245,33 @@ export const DB = {
     return (stmts.getTotalGrabCount.get() as any)?.count || 0;
   },
 
+  // ══ SCHEDULE CONFIG PERSISTENCE ══
+  setScheduleConfig(email: string, driverLevel: string) {
+    stmts.upsertScheduleConfig.run(email, driverLevel);
+  },
+
+  getScheduleConfigs(): ScheduleConfigRow[] {
+    return stmts.getScheduleConfigs.all() as ScheduleConfigRow[];
+  },
+
+  deleteScheduleConfig(email: string) {
+    stmts.deleteScheduleConfig.run(email);
+  },
+
   performMaintenance() {
     const sevenDaysAgo = Date.now() - (7 * 24 * 60 * 60 * 1000);
     stmts.cleanupOldLogs.run(sevenDaysAgo);
     stmts.cleanupOldGrabs.run(sevenDaysAgo);
-    // WAL checkpoint — flush write-ahead log to main database file
     db.pragma('wal_checkpoint(TRUNCATE)');
-    // Clear account cache to pick up any stale data
     accountCache.clear();
     console.log('[DB] Maintenance complete: old logs purged, WAL checkpointed');
   },
 
-  // 🔥 ALMIGHTY: Reset all sniper_running flags on boot (clean slate after crash)
   resetAllSniperFlags() {
     stmts.resetSniperFlags.run();
     accountCache.clear();
   },
 
-  // Get raw DB stats for dashboard
   getStats() {
     const accounts = (db.prepare('SELECT COUNT(*) as count FROM accounts').get() as any)?.count || 0;
     const logs = (db.prepare('SELECT COUNT(*) as count FROM logs').get() as any)?.count || 0;

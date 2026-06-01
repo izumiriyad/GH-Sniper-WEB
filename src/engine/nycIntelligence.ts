@@ -1,14 +1,15 @@
-// NYC Market Intelligence + Schedule Release Day Sniper + Telegram Alerts
+// NYC Market Intelligence + GUARANTEED Schedule Release + Telegram Alerts
+// v4 ALMIGHTY: Watchdog-based schedule release that NEVER misses
 import axios from 'axios';
 import https from 'https';
 import DB from '../db/database';
-import { getBlocks, pickupBlock, refreshToken, isTokenExpiring, Block, API_ENDPOINTS, rawPickupBlock, getTrueTime } from '../api/grubhubApi';
+import { getBlocks, pickupBlock, refreshToken, isTokenExpiring, Block, API_ENDPOINTS, rawPickupBlock, getTrueTime, syncServerTime, getProxyStatus } from '../api/grubhubApi';
 
-// Dedicated stealth agent for schedule release (mirrors main engine)
+// Dedicated stealth agent for schedule release
 const releaseAgent = new https.Agent({
   keepAlive: true,
   keepAliveMsecs: 1000,
-  maxSockets: Infinity, // 🔥 ALMIGHTY: Uncapped for schedule release blitz
+  maxSockets: Infinity,
   maxFreeSockets: 500,
   timeout: 30000,
   scheduling: 'fifo',
@@ -16,7 +17,6 @@ const releaseAgent = new https.Agent({
   maxVersion: 'TLSv1.3',
 });
 
-// Nagle bypass + keep-alive probes on release sockets
 releaseAgent.on('socket', (socket) => {
   socket.setNoDelay(true);
   socket.setKeepAlive(true, 1000);
@@ -53,19 +53,15 @@ export async function sendTelegram(message: string) {
 }
 
 // ══ NYC MARKET INTELLIGENCE ══
-// NYC block drop patterns based on market analysis
 export const NYC_INTELLIGENCE = {
-  // GH releases new schedule blocks at these times (EST)
   scheduleReleaseDays: {
-    premier: 'Thursday',   // Premier drivers get first access
-    pro: 'Friday',         // Pro drivers
-    partner: 'Saturday',   // Partner (lowest tier)
+    premier: 'Thursday',
+    pro: 'Friday',
+    partner: 'Saturday',
   },
-  // Schedule drops at midnight EST for the upcoming week
-  scheduleReleaseHour: 0, // midnight
+  scheduleReleaseHour: 0,
   scheduleReleaseMinute: 0,
 
-  // Peak drop windows — when drivers drop blocks they don't want
   peakDropTimes: [
     { hour: 6, min: 0, reason: 'Morning shift drops (drivers who overslept)' },
     { hour: 10, min: 30, reason: 'Late morning adjustments' },
@@ -74,22 +70,50 @@ export const NYC_INTELLIGENCE = {
     { hour: 22, min: 0, reason: 'Late night drops' },
   ],
 
-  // No-show release windows (every 30 min block)
   noShowWindows: [
     { offsetMin: 13, offsetMax: 16, reason: 'Hour blocks: 14-min grace period expired' },
     { offsetMin: 43, offsetMax: 46, reason: 'Half-hour blocks: 14-min grace period expired' },
   ],
 
-  // NYC-specific: busiest regions
   hotRegions: ['Manhattan', 'Brooklyn', 'Queens', 'Bronx', 'Staten Island'],
-
-  // Rate limit thresholds per subdomain
-  maxRequestsPerMinute: 20, // Stay under radar
-  backoffOnRateLimit: 5000, // 5s backoff on 429
+  maxRequestsPerMinute: 20,
+  backoffOnRateLimit: 5000,
 };
 
-// ══ SCHEDULE RELEASE DAY SNIPER ══
-// Fires at EXACTLY midnight on schedule release day
+// ══ PROPER EST/EDT TIMEZONE (No toLocaleString bullshit) ══
+// EST = UTC-5, EDT = UTC-4. We calculate DST manually.
+function getESTDate(): Date {
+  const now = new Date();
+  const year = now.getUTCFullYear();
+  
+  // US DST: Second Sunday of March to First Sunday of November
+  const marchSecondSunday = new Date(Date.UTC(year, 2, 1));
+  marchSecondSunday.setUTCDate(14 - marchSecondSunday.getUTCDay());
+  marchSecondSunday.setUTCHours(7, 0, 0, 0); // 2AM EST = 7AM UTC
+  
+  const novFirstSunday = new Date(Date.UTC(year, 10, 1));
+  novFirstSunday.setUTCDate(7 - novFirstSunday.getUTCDay());
+  novFirstSunday.setUTCHours(6, 0, 0, 0); // 2AM EDT = 6AM UTC
+  
+  const isDST = now.getTime() >= marchSecondSunday.getTime() && now.getTime() < novFirstSunday.getTime();
+  const offsetHours = isDST ? -4 : -5;
+  
+  return new Date(now.getTime() + offsetHours * 3600000);
+}
+
+function getESTNow(): { hour: number; minute: number; second: number; dayOfWeek: number; timestamp: number } {
+  const est = getESTDate();
+  return {
+    hour: est.getUTCHours(),
+    minute: est.getUTCMinutes(),
+    second: est.getUTCSeconds(),
+    dayOfWeek: est.getUTCDay(), // 0=Sun, 1=Mon, ..., 4=Thu, 5=Fri, 6=Sat
+    timestamp: Date.now(),
+  };
+}
+
+// ══ GUARANTEED SCHEDULE RELEASE SYSTEM ══
+// Instead of one setTimeout, a persistent watchdog checks every 30s
 
 interface ScheduleReleaseConfig {
   driverLevel: 'premier' | 'pro' | 'partner';
@@ -97,76 +121,184 @@ interface ScheduleReleaseConfig {
   enabled: boolean;
 }
 
+// In-memory state (loaded from DB on boot)
 const releaseConfigs = new Map<string, ScheduleReleaseConfig>();
-let releaseTimer: ReturnType<typeof setTimeout> | null = null;
+
+// Release state tracking
+let releaseState: {
+  phase: 'idle' | 'warming' | 'pre_refresh' | 'polling' | 'cooldown';
+  lastFireTime: number;
+  lastPhaseChange: number;
+  totalGrabsThisSession: number;
+  pollCount: number;
+} = {
+  phase: 'idle',
+  lastFireTime: 0,
+  lastPhaseChange: 0,
+  totalGrabsThisSession: 0,
+  pollCount: 0,
+};
 
 export function setScheduleReleaseConfig(email: string, driverLevel: 'premier' | 'pro' | 'partner') {
   releaseConfigs.set(email, { driverLevel, email, enabled: true });
-  scheduleNextRelease();
+  DB.setScheduleConfig(email, driverLevel);
+  console.log('[ScheduleRelease] Config saved: ' + email + ' (' + driverLevel + ')');
 }
 
 export function getScheduleReleaseConfigs(): ScheduleReleaseConfig[] {
   return [...releaseConfigs.values()];
 }
 
-function getNextReleaseTime(level: 'premier' | 'pro' | 'partner'): Date {
-  const dayMap = { premier: 4, pro: 5, partner: 6 }; // Thu=4, Fri=5, Sat=6
-  const targetDay = dayMap[level];
-  const now = new Date();
-  const estNow = new Date(now.toLocaleString('en-US', { timeZone: 'America/New_York' }));
-  const currentDay = estNow.getDay();
-
-  let daysUntil = targetDay - currentDay;
-  if (daysUntil < 0) daysUntil += 7;
-  if (daysUntil === 0 && estNow.getHours() >= 0 && estNow.getMinutes() >= 5) daysUntil = 7; // Already passed today
-
-  const release = new Date(estNow);
-  release.setDate(release.getDate() + daysUntil);
-  release.setHours(0, 0, 0, 0);
-  return release;
+export function getScheduleReleaseState() {
+  return { ...releaseState, configCount: releaseConfigs.size };
 }
 
-function scheduleNextRelease() {
-  if (releaseTimer) clearTimeout(releaseTimer);
+// Load configs from DB on boot
+function loadScheduleConfigsFromDB() {
+  try {
+    const rows = DB.getScheduleConfigs();
+    for (const row of rows) {
+      releaseConfigs.set(row.email, {
+        email: row.email,
+        driverLevel: row.driver_level as 'premier' | 'pro' | 'partner',
+        enabled: true,
+      });
+    }
+    console.log('[ScheduleRelease] Loaded ' + releaseConfigs.size + ' configs from DB');
+  } catch (e: any) {
+    console.error('[ScheduleRelease] Failed to load configs:', e.message);
+  }
+}
 
-  let earliestMs = Infinity;
-  let earliestConfig: ScheduleReleaseConfig | null = null;
-
+// 🔥 CORE: Get minutes until next release for ANY config
+function getMinutesToRelease(): { minutesAway: number; configs: ScheduleReleaseConfig[]; releaseLabel: string } | null {
+  if (releaseConfigs.size === 0) return null;
+  
+  const dayMap: Record<string, number> = { premier: 4, pro: 5, partner: 6 }; // Thu=4, Fri=5, Sat=6
+  const est = getESTNow();
+  
+  let bestMinutes = Infinity;
+  let bestConfigs: ScheduleReleaseConfig[] = [];
+  let bestLabel = '';
+  
   for (const config of releaseConfigs.values()) {
     if (!config.enabled) continue;
-    const releaseTime = getNextReleaseTime(config.driverLevel);
-    const ms = releaseTime.getTime() - Date.now();
-    if (ms > 0 && ms < earliestMs) {
-      earliestMs = ms;
-      earliestConfig = config;
+    const targetDay = dayMap[config.driverLevel];
+    
+    let daysUntil = targetDay - est.dayOfWeek;
+    if (daysUntil < 0) daysUntil += 7;
+    // If it's the target day but past 00:10 EST, wait for next week
+    if (daysUntil === 0 && (est.hour > 0 || est.minute > 10)) daysUntil = 7;
+    
+    const minutesAway = daysUntil * 24 * 60 + (0 - est.hour) * 60 + (0 - est.minute);
+    const adjustedMinutes = minutesAway < 0 ? minutesAway + 7 * 24 * 60 : minutesAway;
+    
+    if (adjustedMinutes < bestMinutes) {
+      bestMinutes = adjustedMinutes;
+      bestConfigs = [config];
+      bestLabel = config.driverLevel + ' (' + NYC_INTELLIGENCE.scheduleReleaseDays[config.driverLevel] + ')';
+    } else if (adjustedMinutes === bestMinutes) {
+      bestConfigs.push(config);
     }
   }
-
-  if (earliestConfig && earliestMs < 7 * 24 * 60 * 60 * 1000) {
-    console.log('[ScheduleRelease] Next fire in ' + Math.round(earliestMs / 3600000) + 'h for ' + earliestConfig.email + ' (' + earliestConfig.driverLevel + ')');
-    releaseTimer = setTimeout(() => fireScheduleRelease(), earliestMs);
-  }
+  
+  if (bestMinutes === Infinity) return null;
+  return { minutesAway: bestMinutes, configs: bestConfigs, releaseLabel: bestLabel };
 }
 
-async function fireScheduleRelease() {
-  console.log('[ScheduleRelease] FIRING!');
-  sendTelegram('🔥 <b>SCHEDULE RELEASE FIRING!</b>\nNew blocks dropping NOW!');
+// 🔥 WATCHDOG: Runs every 30 seconds, handles all schedule release phases
+let watchdogInterval: ReturnType<typeof setInterval> | null = null;
 
-  for (const config of releaseConfigs.values()) {
-    if (!config.enabled) continue;
-    const releaseTime = getNextReleaseTime(config.driverLevel);
-    if (Math.abs(releaseTime.getTime() - Date.now()) > 60000) continue; // Not this config's time
+function startScheduleWatchdog() {
+  if (watchdogInterval) return;
+  
+  loadScheduleConfigsFromDB();
+  
+  watchdogInterval = setInterval(async () => {
+    if (releaseConfigs.size === 0) return;
+    if (releaseState.phase === 'polling' || releaseState.phase === 'cooldown') return; // Already firing
+    
+    const next = getMinutesToRelease();
+    if (!next) return;
+    
+    // Phase transitions based on minutes to release
+    if (next.minutesAway <= 5 && next.minutesAway > 2 && releaseState.phase === 'idle') {
+      // T-5 MINUTES: Pre-warm connections
+      releaseState.phase = 'warming';
+      releaseState.lastPhaseChange = Date.now();
+      console.log('[ScheduleRelease] T-5min: Pre-warming connections for ' + next.releaseLabel);
+      sendTelegram('🔥 <b>T-5 MINUTES!</b>\nSchedule release warming up for ' + next.releaseLabel + '\nPre-warming connections to all GH subdomains...');
+      
+      // Warm connections to all subdomains
+      for (const base of ALL_BASES) {
+        try {
+          await axios.head(base + '/healthcheck', { timeout: 3000, httpsAgent: releaseAgent, validateStatus: () => true });
+        } catch {}
+      }
+      await syncServerTime();
+    }
+    
+    if (next.minutesAway <= 2 && next.minutesAway > 0.5 && releaseState.phase === 'warming') {
+      // T-2 MINUTES: Pre-refresh ALL tokens
+      releaseState.phase = 'pre_refresh';
+      releaseState.lastPhaseChange = Date.now();
+      console.log('[ScheduleRelease] T-2min: Pre-refreshing tokens');
+      sendTelegram('🔄 <b>T-2 MINUTES!</b>\nRefreshing all tokens before midnight drop...');
+      
+      for (const config of next.configs) {
+        if (isTokenExpiring(config.email)) {
+          await refreshToken(config.email);
+          console.log('[ScheduleRelease] Token refreshed: ' + config.email);
+        }
+      }
+      
+      // Final connection warm
+      await syncServerTime();
+    }
+    
+    if (next.minutesAway <= 0.5 && (releaseState.phase as string) !== 'polling') {
+      // T-30 SECONDS: START POLLING (blocks sometimes appear early!)
+      releaseState.phase = 'polling';
+      releaseState.lastPhaseChange = Date.now();
+      releaseState.pollCount = 0;
+      releaseState.totalGrabsThisSession = 0;
+      console.log('[ScheduleRelease] 🚀 FIRING! Polling started for ' + next.releaseLabel);
+      sendTelegram('🚀 <b>SCHEDULE RELEASE FIRING!</b>\n' + next.releaseLabel + '\nPolling ALL subdomains at 50ms intervals for 10 minutes...');
+      
+      // Fire the actual polling loop (non-blocking)
+      fireGuaranteedRelease(next.configs).then(() => {
+        releaseState.phase = 'cooldown';
+        releaseState.lastFireTime = Date.now();
+        // Return to idle after 15 minutes cooldown
+        setTimeout(() => { releaseState.phase = 'idle'; }, 15 * 60 * 1000);
+      });
+    }
+  }, 30000); // Check every 30 seconds
+  
+  console.log('[ScheduleRelease] Watchdog active. Checking every 30s. ' + releaseConfigs.size + ' configs loaded.');
+}
 
+// 🔥 THE ACTUAL GUARANTEED RELEASE POLLER
+async function fireGuaranteedRelease(configs: ScheduleReleaseConfig[]) {
+  const POLL_DURATION_MS = 10 * 60 * 1000; // 10 full minutes
+  const POLL_INTERVAL_MS = 50; // 50ms = 20 polls/second = blazing fast
+  const deadline = Date.now() + POLL_DURATION_MS;
+  
+  const grabbedIds = new Set<string>();
+  let totalGrabbed = 0;
+  let polls = 0;
+  
+  for (const config of configs) {
     const email = config.email;
-    DB.addLog(email, 'SCHEDULE_RELEASE', undefined, 'info', 'Release day sniper firing for ' + config.driverLevel);
-
-    // Refresh token first
-    if (isTokenExpiring(email)) await refreshToken(email);
-
+    DB.addLog(email, 'SCHEDULE_RELEASE', undefined, 'info', 'GUARANTEED release firing for ' + config.driverLevel);
+    
     const acc = DB.getAccount(email);
-    if (!acc?.access_token) continue;
-
-    // Full stealth headers for schedule release (critical: use same fingerprint as main engine)
+    if (!acc?.access_token) {
+      console.log('[ScheduleRelease] No token for ' + email + ' — skipping');
+      continue;
+    }
+    
+    // Build stealth headers
     const headers: Record<string, string> = {
       'Authorization': 'Bearer ' + acc.access_token,
       'Content-Type': 'application/json',
@@ -182,63 +314,106 @@ async function fireScheduleRelease() {
       'Accept-Encoding': 'identity',
       'Connection': 'keep-alive',
     };
-
-    const deadline = Date.now() + 180000; // 3 minutes of aggressive polling (increased from 2)
-    let polls = 0;
-    let totalGrabbed = 0;
-
+    
     while (Date.now() < deadline) {
       polls++;
+      releaseState.pollCount = polls;
+      
+      if (polls % 200 === 0) {
+        console.log('[ScheduleRelease] Poll #' + polls + ' | ' + totalGrabbed + ' grabs | ' + Math.round((deadline - Date.now()) / 1000) + 's remaining');
+      }
+      
       try {
+        // Scan ALL subdomains simultaneously
         const scans = await Promise.all(ALL_BASES.map(base =>
           axios.get(base + BLOCK_PATH, { headers, timeout: 3000, httpsAgent: releaseAgent, validateStatus: () => true })
             .then(res => {
               if (res.status !== 200) return [];
-              const blocks = extractBlocksSimple(res.data);
-              return blocks.filter(b => b.couriers_needed > 0 && new Date(b.start) > new Date(getTrueTime()));
+              return extractBlocksSimple(res.data).filter(b =>
+                b.couriers_needed > 0 &&
+                new Date(b.start) > new Date(getTrueTime()) &&
+                !grabbedIds.has(b.id)
+              );
             })
             .catch(() => [] as any[])
         ));
-
+        
+        // De-duplicate across all subdomains
         const allOpen = scans.flat();
-        // De-duplicate blocks by ID
         const unique = [...new Map(allOpen.map(b => [b.id, b])).values()];
-
+        
         if (unique.length > 0) {
-          console.log('[ScheduleRelease] FOUND ' + unique.length + ' NEW BLOCKS!');
-          sendTelegram('🎯 Found ' + unique.length + ' new blocks! Grabbing...');
-
-          // Grab up to 10 blocks (fill the entire week)
-          for (const block of unique.slice(0, 10)) {
+          console.log('[ScheduleRelease] 🎯 FOUND ' + unique.length + ' BLOCKS at poll #' + polls + '!');
+          sendTelegram('🎯 Found <b>' + unique.length + '</b> new blocks at poll #' + polls + '! Grabbing ALL...');
+          
+          // Grab EVERY single block — NO LIMIT
+          for (const block of unique) {
+            if (grabbedIds.has(block.id)) continue;
+            
+            // Fire pickup across ALL subdomains for maximum race advantage
             const pickups = ALL_BASES.map(base =>
               rawPickupBlock(email, block.id, headers, base).catch(() => ({ status: 0, raw: 'ERROR' }))
             );
-            const rr = await Promise.all(pickups);
-            const won = rr.find(r => r && r.status === 200);
+            const results = await Promise.all(pickups);
+            const won = results.find(r => r && r.status === 200);
+            
             if (won) {
+              grabbedIds.add(block.id);
               totalGrabbed++;
-              DB.addLog(email, 'RELEASE_GRAB', block.id, 'grabbed', 'Schedule release grab at poll ' + polls);
+              releaseState.totalGrabsThisSession = totalGrabbed;
+              DB.addLog(email, 'RELEASE_GRAB', block.id, 'grabbed', 'Schedule release @ poll #' + polls);
               DB.addGrab(email, block.id, block.start, block.end, 'schedule_release');
-              sendTelegram('✅ <b>GRABBED!</b> ' + new Date(block.start).toLocaleString() + ' for ' + email);
-              console.log('[ScheduleRelease] GRABBED ' + block.id + ' for ' + email + ' (total: ' + totalGrabbed + ')');
+              sendTelegram('✅ <b>GRABBED #' + totalGrabbed + '!</b>\n' + new Date(block.start).toLocaleString() + '\nPoll: #' + polls + ' | Account: ' + email);
+              console.log('[ScheduleRelease] ✅ GRABBED ' + block.id + ' (#' + totalGrabbed + ') for ' + email);
+            } else {
+              // Retry failed grabs after 100ms
+              await new Promise(r => setTimeout(r, 100));
+              const retryResults = await Promise.all(ALL_BASES.map(base =>
+                rawPickupBlock(email, block.id, headers, base).catch(() => ({ status: 0, raw: 'RETRY_ERROR' }))
+              ));
+              const retryWon = retryResults.find(r => r && r.status === 200);
+              if (retryWon) {
+                grabbedIds.add(block.id);
+                totalGrabbed++;
+                releaseState.totalGrabsThisSession = totalGrabbed;
+                DB.addLog(email, 'RELEASE_GRAB_RETRY', block.id, 'grabbed', 'Retry succeeded @ poll #' + polls);
+                DB.addGrab(email, block.id, block.start, block.end, 'schedule_release_retry');
+                sendTelegram('✅ <b>GRABBED (RETRY) #' + totalGrabbed + '!</b>\n' + new Date(block.start).toLocaleString());
+              }
             }
           }
         }
-      } catch {}
-      // 🔥 ALMIGHTY: 150ms polling during schedule release — every ms counts at midnight
-      await new Promise(r => setTimeout(r, 150));
+        
+        // Auto-refresh token mid-session if needed (every 500 polls)
+        if (polls % 500 === 0 && isTokenExpiring(email)) {
+          console.log('[ScheduleRelease] Mid-session token refresh for ' + email);
+          const refreshed = await refreshToken(email);
+          if (refreshed) {
+            const newAcc = DB.getAccount(email);
+            if (newAcc?.access_token) {
+              headers['Authorization'] = 'Bearer ' + newAcc.access_token;
+            }
+          }
+        }
+        
+      } catch (e: any) {
+        if (polls % 100 === 0) console.log('[ScheduleRelease] Poll error: ' + e.message);
+      }
+      
+      // 50ms interval — 20 polls per second
+      await new Promise(r => setTimeout(r, POLL_INTERVAL_MS));
     }
-
+    
+    // Session complete
     if (totalGrabbed === 0) {
-      DB.addLog(email, 'RELEASE_MISS', undefined, 'fail', polls + ' polls, no blocks found');
-      sendTelegram('❌ Release sniper: ' + polls + ' polls, no new blocks for ' + email);
+      DB.addLog(email, 'RELEASE_MISS', undefined, 'fail', polls + ' polls in 10 minutes, no blocks found');
+      sendTelegram('❌ Schedule release: <b>' + polls + ' polls</b> in 10 minutes, no new blocks for ' + email + '. Will retry next week.');
     } else {
-      sendTelegram('🏆 <b>RELEASE COMPLETE:</b> Grabbed ' + totalGrabbed + ' blocks for ' + email + ' in ' + polls + ' polls');
+      sendTelegram('🏆 <b>RELEASE COMPLETE!</b>\nGrabbed <b>' + totalGrabbed + '</b> blocks for ' + email + '\nTotal polls: ' + polls);
     }
   }
-
-  // Schedule next release
-  scheduleNextRelease();
+  
+  console.log('[ScheduleRelease] Session complete. ' + totalGrabbed + ' total grabs in ' + polls + ' polls.');
 }
 
 function extractBlocksSimple(data: any): any[] {
@@ -264,7 +439,6 @@ function extractBlocksSimple(data: any): any[] {
 }
 
 // ══ CONNECTION PRE-WARMING ══
-// Keep TCP connections alive to all subdomains
 let warmingInterval: ReturnType<typeof setInterval> | null = null;
 
 export function startConnectionWarming() {
@@ -275,12 +449,18 @@ export function startConnectionWarming() {
         await axios.head(base + '/healthcheck', { timeout: 2000, httpsAgent: releaseAgent, validateStatus: () => true });
       } catch {}
     }
-  }, 25000); // Every 25s keeps connections alive
-  console.log('[Warming] Connection pre-warming started');
+    // Also sync server time
+    try { await syncServerTime(); } catch {}
+  }, 25000);
+  console.log('[Warming] Connection pre-warming started (every 25s + time sync)');
+  
+  // Also start the schedule release watchdog
+  startScheduleWatchdog();
 }
 
 export function stopConnectionWarming() {
   if (warmingInterval) { clearInterval(warmingInterval); warmingInterval = null; }
+  if (watchdogInterval) { clearInterval(watchdogInterval); watchdogInterval = null; }
 }
 
 // ══ RATE LIMIT TRACKER ══
@@ -288,21 +468,13 @@ const rateLimitState = new Map<string, { count: number; resetAt: number; blocked
 
 export function trackRequest(base: string, statusCode: number) {
   const state = rateLimitState.get(base) || { count: 0, resetAt: Date.now() + 60000, blocked: false };
-
-  if (Date.now() > state.resetAt) {
-    state.count = 0;
-    state.resetAt = Date.now() + 60000;
-    state.blocked = false;
-  }
-
+  if (Date.now() > state.resetAt) { state.count = 0; state.resetAt = Date.now() + 60000; state.blocked = false; }
   state.count++;
-
   if (statusCode === 429) {
     state.blocked = true;
     state.resetAt = Date.now() + NYC_INTELLIGENCE.backoffOnRateLimit;
     console.log('[RateLimit] ' + base + ' rate limited. Backing off ' + NYC_INTELLIGENCE.backoffOnRateLimit + 'ms');
   }
-
   rateLimitState.set(base, state);
 }
 
@@ -325,15 +497,12 @@ export function getRateLimitStatus(): Record<string, any> {
 
 // ══ NYC PEAK TIME TRACKER ══
 export function getNextPeakDrop(): { time: string; reason: string; minutesAway: number } | null {
-  const now = new Date();
-  const estNow = new Date(now.toLocaleString('en-US', { timeZone: 'America/New_York' }));
-  const currentHour = estNow.getHours();
-  const currentMin = estNow.getMinutes();
-
+  const est = getESTNow();
+  
   for (const peak of NYC_INTELLIGENCE.peakDropTimes) {
-    let minsAway = (peak.hour - currentHour) * 60 + (peak.min - currentMin);
+    let minsAway = (peak.hour - est.hour) * 60 + (peak.min - est.minute);
     if (minsAway < 0) minsAway += 24 * 60;
-    if (minsAway < 120) { // Within 2 hours
+    if (minsAway < 120) {
       return {
         time: peak.hour + ':' + (peak.min < 10 ? '0' : '') + peak.min + ' EST',
         reason: peak.reason,
@@ -342,4 +511,16 @@ export function getNextPeakDrop(): { time: string; reason: string; minutesAway: 
     }
   }
   return null;
+}
+
+// 🔥 v4: Get next schedule release info for dashboard
+export function getNextScheduleRelease() {
+  const next = getMinutesToRelease();
+  if (!next) return null;
+  return {
+    minutesAway: next.minutesAway,
+    label: next.releaseLabel,
+    accounts: next.configs.map(c => c.email),
+    state: releaseState,
+  };
 }

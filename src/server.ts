@@ -1,25 +1,44 @@
 process.env.UV_THREADPOOL_SIZE = '128';
-// GHSniper Web Server — Express + API routes + Web dashboard
+// GHSniper Web Server v4 — Express + API routes + Web dashboard
+// 🔥 v4: Added auth, trust proxy, schedule release status, proxy status
 import express from 'express';
 import cors from 'cors';
 import cookieParser from 'cookie-parser';
 import path from 'path';
 import DB from './db/database';
-import { getBlocks, pickupBlock, refreshToken, instantBypass, SniperResult } from './api/grubhubApi';
+import { getBlocks, pickupBlock, refreshToken, instantBypass, SniperResult, getProxyStatus } from './api/grubhubApi';
 import { startSniper, stopSniper, getSniperStatus, getAllSniperStatuses } from './engine/sniperEngine';
-import { setTelegramConfig, getTelegramConfig, sendTelegram, setScheduleReleaseConfig, getScheduleReleaseConfigs, startConnectionWarming, getNextPeakDrop, getRateLimitStatus, NYC_INTELLIGENCE } from './engine/nycIntelligence';
+import { setTelegramConfig, getTelegramConfig, sendTelegram, setScheduleReleaseConfig, getScheduleReleaseConfigs, startConnectionWarming, getNextPeakDrop, getRateLimitStatus, NYC_INTELLIGENCE, getScheduleReleaseState, getNextScheduleRelease } from './engine/nycIntelligence';
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+const AUTH_TOKEN = process.env.AUTH_TOKEN || ''; // Set via Railway env var
+
+// 🔥 v4: Trust Railway's reverse proxy for correct req.ip
+app.set('trust proxy', 1);
 
 app.use(cors());
 app.use(express.json());
 app.use(cookieParser());
 
-// 🔥 ALMIGHTY: Hard timeout on all API requests to prevent zombie connections
+// Hard timeout on all API requests
 app.use((req, res, next) => {
   req.setTimeout(30000);
   res.setTimeout(30000);
+  next();
+});
+
+// 🔥 v4: Auth middleware — skip for static files and health check
+app.use('/api', (req, res, next) => {
+  // Health check is public
+  if (req.path === '/health') return next();
+  // If AUTH_TOKEN is not set, skip auth (backward compat)
+  if (!AUTH_TOKEN) return next();
+  
+  const token = req.headers.authorization?.replace('Bearer ', '') || req.query.token as string || '';
+  if (token !== AUTH_TOKEN) {
+    return res.status(401).json({ error: 'Unauthorized. Set AUTH_TOKEN env var and pass it as Bearer token.' });
+  }
   next();
 });
 
@@ -27,7 +46,6 @@ app.use(express.static(path.join(__dirname, '..', 'public')));
 
 // ══ ACCOUNT ROUTES ══
 
-// Add account (paste token)
 app.post('/api/accounts', (req, res) => {
   const { email, accessToken, refreshToken: rt, capturedHeaders } = req.body;
   if (!email || !accessToken) return res.status(400).json({ error: 'email and accessToken required' });
@@ -37,7 +55,6 @@ app.post('/api/accounts', (req, res) => {
   res.json({ ok: true, account });
 });
 
-// List all accounts
 app.get('/api/accounts', (_req, res) => {
   const accounts = DB.getAllAccounts();
   const statuses = getAllSniperStatuses();
@@ -50,14 +67,12 @@ app.get('/api/accounts', (_req, res) => {
   res.json(enriched);
 });
 
-// Delete account
 app.delete('/api/accounts/:email', (req, res) => {
   stopSniper(req.params.email);
   DB.deleteAccount(req.params.email);
   res.json({ ok: true });
 });
 
-// Refresh token
 app.post('/api/accounts/:email/refresh', async (req, res) => {
   const ok = await refreshToken(req.params.email);
   res.json({ ok, message: ok ? 'Token refreshed' : 'Refresh failed' });
@@ -65,7 +80,6 @@ app.post('/api/accounts/:email/refresh', async (req, res) => {
 
 // ══ BLOCKS ROUTES ══
 
-// Get blocks for account
 app.get('/api/blocks/:email', async (req, res) => {
   try {
     const blocks = await getBlocks(req.params.email);
@@ -82,7 +96,6 @@ app.get('/api/blocks/:email', async (req, res) => {
   }
 });
 
-// Pickup a specific block
 app.post('/api/blocks/:email/pickup/:blockId', async (req, res) => {
   try {
     const result = await pickupBlock(req.params.email, req.params.blockId);
@@ -97,20 +110,17 @@ app.post('/api/blocks/:email/pickup/:blockId', async (req, res) => {
 
 // ══ SNIPER ROUTES ══
 
-// Start continuous sniper (JOB:PICKUP)
 app.post('/api/sniper/:email/start', async (req, res) => {
   const interval = req.body.intervalMs || 3000;
   const result = await startSniper(req.params.email, interval);
   res.json(result);
 });
 
-// Stop sniper
 app.post('/api/sniper/:email/stop', (req, res) => {
   const result = stopSniper(req.params.email);
   res.json(result);
 });
 
-// Get sniper status
 app.get('/api/sniper/:email/status', (req, res) => {
   const status = getSniperStatus(req.params.email);
   if (!status) return res.json({ running: false, email: req.params.email });
@@ -126,7 +136,6 @@ app.get('/api/sniper/:email/status', (req, res) => {
   });
 });
 
-// Get all sniper statuses
 app.get('/api/snipers', (_req, res) => {
   const all = getAllSniperStatuses();
   res.json(all.map(s => ({
@@ -138,7 +147,6 @@ app.get('/api/snipers', (_req, res) => {
   })));
 });
 
-// Run instant bypass (4 strategies)
 app.post('/api/instant/:email', async (req, res) => {
   const logs: string[] = [];
   try {
@@ -176,7 +184,7 @@ app.post('/api/telegram', (req, res) => {
   const { botToken, chatId } = req.body;
   if (!botToken || !chatId) return res.status(400).json({ error: 'botToken and chatId required' });
   setTelegramConfig(botToken, chatId);
-  sendTelegram('✅ GHSniper Web connected! Notifications active.');
+  sendTelegram('✅ GHSniper Web v4 connected! Notifications active.');
   res.json({ ok: true });
 });
 
@@ -185,7 +193,7 @@ app.get('/api/telegram', (_req, res) => {
 });
 
 app.post('/api/telegram/test', async (_req, res) => {
-  await sendTelegram('🧪 Test notification from GHSniper Web v3');
+  await sendTelegram('🧪 Test notification from GHSniper Web v4 ALMIGHTY');
   res.json({ ok: true });
 });
 
@@ -198,7 +206,11 @@ app.post('/api/schedule-release', (req, res) => {
 });
 
 app.get('/api/schedule-release', (_req, res) => {
-  res.json(getScheduleReleaseConfigs());
+  res.json({
+    configs: getScheduleReleaseConfigs(),
+    state: getScheduleReleaseState(),
+    nextRelease: getNextScheduleRelease(),
+  });
 });
 
 // ══ NYC INTELLIGENCE ══
@@ -207,22 +219,33 @@ app.get('/api/nyc', (_req, res) => {
     nextPeakDrop: getNextPeakDrop(),
     rateLimits: getRateLimitStatus(),
     intelligence: NYC_INTELLIGENCE,
+    proxyStatus: getProxyStatus(),
+    nextScheduleRelease: getNextScheduleRelease(),
   });
 });
 
-// ══ HEALTH CHECK ══
+// ══ HEALTH CHECK (public — no auth) ══
 app.get('/api/health', (_req, res) => {
   const accounts = DB.getAllAccounts();
   const snipers = getAllSniperStatuses();
   res.json({
     status: 'ok',
+    version: '4.0.0',
     uptime: Math.round(process.uptime()) + 's',
     accounts: accounts.length,
     activeSnipers: snipers.filter(s => s.running).length,
     memory: Math.round(process.memoryUsage().heapUsed / 1024 / 1024) + 'MB',
     dbStats: DB.getStats(),
+    proxyStatus: getProxyStatus(),
+    scheduleRelease: getScheduleReleaseState(),
+    authEnabled: !!AUTH_TOKEN,
     timestamp: new Date().toISOString(),
   });
+});
+
+// ══ AUTH STATUS (for frontend) ══
+app.get('/api/auth-status', (_req, res) => {
+  res.json({ authRequired: !!AUTH_TOKEN });
 });
 
 // ══ DASHBOARD ══
@@ -230,42 +253,40 @@ app.get('/', (_req, res) => {
   res.sendFile(path.join(__dirname, '..', 'public', 'index.html'));
 });
 
-// Database maintenance (Runs every 6 hours)
+// Database maintenance (every 6 hours)
 setInterval(() => {
   console.log('[Maintenance] Running SQLite Log Rotation & WAL Checkpoint...');
   DB.performMaintenance();
 }, 6 * 60 * 60 * 1000);
 
-// Advanced V8 Memory Optimization (Requires running with --expose-gc)
-// Forces garbage collection during "safe" idle windows to prevent Stop-The-World latency spikes during drops
+// V8 Memory Optimization (safe GC during non-critical windows)
 setInterval(() => {
   if (global.gc) {
     const min = new Date().getMinutes();
-    // Only run GC when we are NOT in the critical drop windows (13-16, 43-46)
     if (![13, 14, 15, 16, 43, 44, 45, 46].includes(min)) {
       global.gc();
     }
   }
-}, 60 * 1000); // Check every minute
+}, 60 * 1000);
 
 // Start server
 app.listen(PORT, () => {
   console.log('');
   console.log('  ╔══════════════════════════════════════════════════╗');
-  console.log('  ║   GHSniper Web v3.0 — NYC Edition                ║');
+  console.log('  ║   GHSniper Web v4.0 — ALMIGHTY Edition           ║');
   console.log('  ║   http://localhost:' + PORT + '                          ║');
-  console.log('  ║   Schedule Release + Telegram + Rate Evasion     ║');
+  console.log('  ║   Guaranteed Schedule + Telegram + Rate Evasion   ║');
+  console.log('  ║   Auth: ' + (AUTH_TOKEN ? 'ENABLED' : 'DISABLED (set AUTH_TOKEN)') + '                        ║');
   console.log('  ╚══════════════════════════════════════════════════╝');
   console.log('');
 
-  // 🔥 ALMIGHTY: Read which snipers were running BEFORE clearing flags
+  // Read which snipers were running BEFORE clearing flags
   const accountsToRestart = DB.getAllAccounts().filter(a => a.sniper_running && a.access_token);
 
-  // Clean stale flags (in case of crash, all flags are now clean)
   DB.resetAllSniperFlags();
   console.log('[Boot] Reset stale sniper flags');
 
-  // 🔥 ALMIGHTY: Pre-warm DNS cache for all GH hostnames on boot
+  // Pre-warm DNS
   const dns = require('dns');
   const ghHosts = [
     'api-managed-delivery-gtm.grubhub.com',
@@ -282,6 +303,7 @@ app.listen(PORT, () => {
     });
   });
 
+  // Start connection warming + schedule release watchdog
   startConnectionWarming();
 
   // Restart snipers that were running before crash/restart
@@ -297,7 +319,6 @@ app.listen(PORT, () => {
 });
 
 // ══ GRACEFUL SHUTDOWN ══
-// Flush SQLite WAL to disk, persist state, and exit cleanly
 const gracefulShutdown = (signal: string) => {
   console.log(`\n[Shutdown] ${signal} received. Flushing state...`);
   try {
@@ -312,20 +333,16 @@ const gracefulShutdown = (signal: string) => {
 process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
 process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 
-// Catch unhandled rejections to prevent silent crashes
 process.on('unhandledRejection', (reason: any) => {
   console.error('[CRITICAL] Unhandled Rejection:', reason?.message || reason);
-  // Don't crash — log and continue. The watchdog will handle stalled loops.
 });
 
 process.on('uncaughtException', (err) => {
   console.error('[CRITICAL] Uncaught Exception:', err.message);
-  // Don't crash on transient network errors — they self-resolve
   const transient = ['ECONNRESET', 'EPIPE', 'ETIMEDOUT', 'ENOTFOUND', 'ECONNREFUSED', 'EHOSTUNREACH', 'EAI_AGAIN', 'SOCKET_TIMEOUT', 'ERR_SOCKET_CONNECTION_TIMEOUT'];
   if (transient.some(code => err.message.includes(code))) {
-    return; // Swallow network errors
+    return;
   }
-  // For real bugs, flush and exit so PM2 restarts us
   gracefulShutdown('UNCAUGHT_EXCEPTION');
 });
 

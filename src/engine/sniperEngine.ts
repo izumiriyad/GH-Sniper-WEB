@@ -18,17 +18,13 @@ interface SniperInstance {
 const snipers = new Map<string, SniperInstance>();
 
 // ── GLOBAL CONNECTION WARMING (SINGLETON) ─────────────────────────────
-// One single interval for ALL accounts — not per-account to avoid leak
-let _globalWarmupTimer: ReturnType<typeof setInterval> | null = null;
+// Delegated to nycIntelligence.ts which handles warming + schedule watchdog
+// import { startConnectionWarming } from './nycIntelligence' is used in server.ts boot
+// This module just re-exports for backward compat
+import { startConnectionWarming as _startWarming } from './nycIntelligence';
 
 export function startConnectionWarming() {
-  if (_globalWarmupTimer) return; // Already running
-  _globalWarmupTimer = setInterval(() => {
-    try {
-      const { syncServerTime } = require('../api/grubhubApi');
-      syncServerTime();
-    } catch (e) {}
-  }, 25000);
+  _startWarming();
 }
 
 // ── MEMORY SWEEPER ─────────────────────────────

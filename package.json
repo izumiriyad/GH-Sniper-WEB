@@ -22,6 +22,7 @@
     "cors": "^2.8.5",
     "express": "^4.21.0",
     "https-proxy-agent": "^7.0.2",
+    "socks-proxy-agent": "^10.1.0",
     "typescript": "^5.4.0",
     "uuid": "^10.0.0"
   },

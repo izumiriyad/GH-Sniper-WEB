@@ -55,12 +55,13 @@ import dns from 'dns';
 
 // ── INTELLIGENT PROXY ROTATOR (DATACENTER BLOCK EVASION) ─────────
 import { HttpsProxyAgent } from 'https-proxy-agent';
+const { SocksProxyAgent } = require('socks-proxy-agent');
 
 const proxyAgents = new Map<string, any>();
 let proxyList: string[] = [];
 let proxyIndex = 0;
 
-// Load proxies from environment or file (e.g. PROXY_URLS="http://user:pass@1.2.3.4:8000,http://...")
+// Load proxies from environment or file (e.g. PROXY_URLS="socks5://user:pass@1.2.3.4:1080,http://...")
 if (process.env.PROXY_URLS) {
   proxyList = process.env.PROXY_URLS.split(',').map(p => p.trim()).filter(Boolean);
   console.log('[ProxyInit] Loaded ' + proxyList.length + ' proxies for Datacenter IP Evasion');
@@ -74,10 +75,15 @@ export function getProxyAgent(email: string): any {
     const proxyUrl = proxyList[proxyIndex % proxyList.length];
     proxyIndex++;
     
-    const agent = new HttpsProxyAgent(proxyUrl);
+    let agent;
+    if (proxyUrl.startsWith('socks')) {
+      agent = new SocksProxyAgent(proxyUrl);
+    } else {
+      agent = new HttpsProxyAgent(proxyUrl);
+    }
     
     // Bind Nagle bypass to proxy socket too
-    agent.on('socket', (socket) => socket.setNoDelay(true));
+    agent.on('socket', (socket: any) => socket.setNoDelay(true));
     proxyAgents.set(email, agent);
   }
   return proxyAgents.get(email)!;

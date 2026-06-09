@@ -252,7 +252,8 @@ export function getTrueTime() {
 // 🔥 v4: Export syncServerTime for connection warming
 export async function syncServerTime() {
   try {
-    const res = await fastClient.head(BLOCK_PATH, { timeout: 3000, validateStatus: () => true });
+    const agent = proxyList.length > 0 ? getProxyAgent('warmup') : undefined;
+    const res = await fastClient.head(BLOCK_PATH, { timeout: 3000, validateStatus: () => true, ...(agent ? { httpsAgent: agent, httpAgent: agent } : {}) });
     if (res.headers) syncTimeDrift(res.headers);
   } catch {}
 }
@@ -390,6 +391,7 @@ export async function refreshToken(email: string): Promise<boolean> {
   if (!acc?.refresh_token) return false;
   const headers = buildHeaders(email, acc.access_token || '');
   try {
+    const proxyA = getProxyAgent(email);
     const res = await authClient.post('/security/oauth2/token', new URLSearchParams({
       grant_type: 'refresh_token',
       refresh_token: acc.refresh_token,
@@ -399,6 +401,8 @@ export async function refreshToken(email: string): Promise<boolean> {
       headers: { ...headers, 'Content-Type': 'application/x-www-form-urlencoded' },
       timeout: 15000,
       validateStatus: () => true,
+      httpsAgent: proxyA,
+      httpAgent: proxyA,
     });
     if (res.status === 200 && res.data?.access_token) {
       const expiresAt = Date.now() + (res.data.expires_in || 3600) * 1000;
@@ -685,7 +689,7 @@ export async function continuousPickup(
       const acc = DB.getAccount(email);
       if (!acc?.access_token) { log('No token!'); await new Promise(r => setTimeout(r, 5000)); continue; }
       const headers = buildHeaders(email, acc.access_token);
-      const res = await fastClient.get(BLOCK_PATH, { headers, timeout: 5000, validateStatus: () => true });
+      const res = await fastClient.get(BLOCK_PATH, buildConfig(email, headers, { timeout: 5000 }));
 
       // Sync time drift on every poll
       if (res.headers) syncTimeDrift(res.headers);
@@ -766,7 +770,7 @@ export async function instantBypass(email: string, log: (m: string) => void): Pr
   // Test session
   try {
     const headers = buildHeaders(email, acc.access_token);
-    const test = await fastClient.get(BLOCK_PATH, { headers, timeout: 8000, validateStatus: () => true });
+    const test = await fastClient.get(BLOCK_PATH, buildConfig(email, headers, { timeout: 8000 }));
     if (test.status === 401 || test.status === 462) {
       results.push({ success: false, strategy: 'preflight', message: 'SESSION EXPIRED (HTTP ' + test.status + ')' });
       return results;

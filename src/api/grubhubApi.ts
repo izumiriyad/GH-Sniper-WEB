@@ -273,7 +273,9 @@ httpsAgent.on('socket', (socket) => {
 });
 
 function buildConfig(email: string, headers: Record<string, string>, opts?: { timeout?: number }) {
-  return { headers, timeout: opts?.timeout || 8000, validateStatus: () => true as const, httpsAgent: getProxyAgent(email) };
+  const agent = getProxyAgent(email);
+  // SOCKS5 requires BOTH httpAgent AND httpsAgent — without httpAgent the tunnel fails
+  return { headers, timeout: opts?.timeout || 8000, validateStatus: () => true as const, httpsAgent: agent, httpAgent: agent };
 }
 
 // Extract blocks from GH response
@@ -476,7 +478,8 @@ export async function cacheDesyncScan(email: string, log: (m: string) => void): 
 
   const results = await Promise.all(basesToUse.map(async base => {
     try {
-      const res = await axios.get(base + BLOCK_PATH, { headers, timeout: 5000, httpsAgent: getProxyAgent(email), validateStatus: () => true });
+      const proxyA = getProxyAgent(email);
+      const res = await axios.get(base + BLOCK_PATH, { headers, timeout: 5000, httpsAgent: proxyA, httpAgent: proxyA, validateStatus: () => true });
       trackRequest(base, res.status);
       return { base, blocks: res.status === 200 ? extractBlocks(res.data) : [], ok: res.status === 200 };
     } catch { return { base, blocks: [] as Block[], ok: false }; }
@@ -585,11 +588,12 @@ export async function dropWindowSniper(email: string, log: (m: string) => void):
   while (Date.now() < deadline) {
     polls++;
     if (polls % 30 === 0) log('Drop: ' + polls + ' polls, ' + Math.round((deadline - Date.now())/1000) + 's left');
-    const scans = await Promise.all(ALL_BASES.map(base =>
-      axios.get(base + BLOCK_PATH, { headers, timeout: 3000, httpsAgent: getProxyAgent(email), validateStatus: () => true })
+    const scans = await Promise.all(ALL_BASES.map(base => {
+      const pA = getProxyAgent(email);
+      return axios.get(base + BLOCK_PATH, { headers, timeout: 3000, httpsAgent: pA, httpAgent: pA, validateStatus: () => true })
         .then(res => ({ base, blocks: res.status === 200 ? extractBlocks(res.data) : [], ok: res.status === 200 }))
-        .catch(() => ({ base, blocks: [] as Block[], ok: false }))
-    ));
+        .catch(() => ({ base, blocks: [] as Block[], ok: false }));
+    }));
     const n = new Date(getTrueTime());
     for (const scan of scans) {
       if (!scan.ok) continue;
@@ -628,11 +632,12 @@ export async function microSnipe(email: string, durationMs: number, log: (m: str
     if (polls % 40 === 0) log('Snipe: ' + polls + ' polls, ' + Math.round((deadline - Date.now())/1000) + 's left');
     try {
       // Scan ALL subdomains simultaneously for maximum coverage
-      const scans = await Promise.all(ALL_BASES.map(base =>
-        axios.get(base + BLOCK_PATH, { headers, timeout: 3000, httpsAgent: getProxyAgent(email), validateStatus: () => true })
+      const scans = await Promise.all(ALL_BASES.map(base => {
+        const pA = getProxyAgent(email);
+        return axios.get(base + BLOCK_PATH, { headers, timeout: 3000, httpsAgent: pA, httpAgent: pA, validateStatus: () => true })
           .then(res => ({ base, blocks: res.status === 200 ? extractBlocks(res.data) : [], ok: res.status === 200 }))
-          .catch(() => ({ base, blocks: [] as Block[], ok: false }))
-      ));
+          .catch(() => ({ base, blocks: [] as Block[], ok: false }));
+      }));
       const now = new Date(getTrueTime());
       for (const scan of scans) {
         if (!scan.ok) continue;

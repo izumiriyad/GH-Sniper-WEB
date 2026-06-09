@@ -260,7 +260,7 @@ function startScheduleWatchdog() {
       
       for (const base of ALL_BASES) {
         try {
-          await axios.head(base + '/healthcheck', { timeout: 3000, httpsAgent: releaseAgent, validateStatus: () => true });
+          await axios.head(base + '/healthcheck', { timeout: 3000, httpsAgent: releaseAgent, httpAgent: releaseAgent, validateStatus: () => true });
         } catch {}
       }
       await syncServerTime();
@@ -396,7 +396,7 @@ async function pollForAccount(
       
       // Scan ALL subdomains simultaneously
       const scans = await Promise.all(ALL_BASES.map(base =>
-        axios.get(base + BLOCK_PATH, { headers, timeout: 3000, httpsAgent: agent, validateStatus: () => true })
+        axios.get(base + BLOCK_PATH, { headers, timeout: 3000, httpsAgent: agent, httpAgent: agent, validateStatus: () => true })
           .then(res => {
             // 🔥 v4.2: WAF evasion — rotate profile + proxy on block
             if (res.status === 403 || res.status === 429) {
@@ -570,7 +570,7 @@ export function startConnectionWarming() {
   warmingInterval = setInterval(async () => {
     for (const base of ALL_BASES) {
       try {
-        await axios.head(base + '/healthcheck', { timeout: 2000, httpsAgent: releaseAgent, validateStatus: () => true });
+        await axios.head(base + '/healthcheck', { timeout: 2000, httpsAgent: releaseAgent, httpAgent: releaseAgent, validateStatus: () => true });
       } catch {}
     }
     try { await syncServerTime(); } catch {}

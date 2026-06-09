@@ -61,30 +61,41 @@ const proxyAgents = new Map<string, any>();
 let proxyList: string[] = [];
 let proxyIndex = 0;
 
-// Load proxies from environment or file (e.g. PROXY_URLS="socks5://user:pass@1.2.3.4:1080,http://...")
+// Load proxies from environment (PROXY_URLS="socks5://user:pass@ip:port,http://user:pass@ip:port")
 if (process.env.PROXY_URLS) {
   proxyList = process.env.PROXY_URLS.split(',').map(p => p.trim()).filter(Boolean);
-  console.log('[ProxyInit] Loaded ' + proxyList.length + ' proxies for Datacenter IP Evasion');
+  console.log('[ProxyInit] Loaded ' + proxyList.length + ' proxies:');
+  proxyList.forEach((p, i) => {
+    const masked = p.replace(/\/\/([^:]+):([^@]+)@/, '//*:*@');
+    console.log('  [' + (i+1) + '] ' + masked);
+  });
 }
 
 export function getProxyAgent(email: string): any {
-  if (proxyList.length === 0) return httpsAgent; // Fallback to direct connection if no proxies
+  if (proxyList.length === 0) return httpsAgent; // no proxy configured → direct
   
   if (!proxyAgents.has(email)) {
-    // Assign a dedicated mobile proxy IP to this specific driver email to avoid IP jumping bans
     const proxyUrl = proxyList[proxyIndex % proxyList.length];
     proxyIndex++;
+    const masked = proxyUrl.replace(/\/\/([^:]+):([^@]+)@/, '//*:*@');
     
-    let agent;
-    if (proxyUrl.startsWith('socks')) {
-      agent = new SocksProxyAgent(proxyUrl);
-    } else {
-      agent = new HttpsProxyAgent(proxyUrl);
+    try {
+      let agent: any;
+      if (proxyUrl.startsWith('socks')) {
+        // SocksProxyAgent — do NOT attach socket listener (SOCKS doesn't expose raw socket)
+        agent = new SocksProxyAgent(proxyUrl, { timeout: 5000 });
+        console.log('[ProxyAssign] ' + email + ' → SOCKS: ' + masked);
+      } else {
+        agent = new HttpsProxyAgent(proxyUrl);
+        // Only HTTP proxies support raw socket events
+        try { agent.on('socket', (s: any) => { s.setNoDelay(true); s.setKeepAlive(true, 1000); }); } catch {}
+        console.log('[ProxyAssign] ' + email + ' → HTTP: ' + masked);
+      }
+      proxyAgents.set(email, agent);
+    } catch (e: any) {
+      console.error('[ProxyError] Failed to create agent for ' + masked + ': ' + e.message);
+      return httpsAgent; // Fallback to direct on agent creation failure
     }
-    
-    // Bind Nagle bypass to proxy socket too
-    agent.on('socket', (socket: any) => socket.setNoDelay(true));
-    proxyAgents.set(email, agent);
   }
   return proxyAgents.get(email)!;
 }

@@ -525,10 +525,10 @@
 
     // Init
     function init() {
-      loadAccounts(); loadGrabs();
+      loadAccounts(); loadGrabs(); loadNYC(); loadReleaseStatus();
       setInterval(loadAccounts, 10000);
       setInterval(loadGrabs, 15000);
-      // Periodically update schedule release status
+      setInterval(loadNYC, 30000);           // Refresh proxy/NYC status every 30s
       setInterval(loadReleaseStatus, 30000);
     }
 

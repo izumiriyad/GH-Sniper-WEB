@@ -30,8 +30,8 @@ app.use((req, res, next) => {
 
 // 🔥 v4: Auth middleware — skip for static files and health check
 app.use('/api', (req, res, next) => {
-  // Health check is public
-  if (req.path === '/health') return next();
+  // Public endpoints — no auth needed
+  if (req.path === '/health' || req.path === '/nyc' || req.path === '/auth-status') return next();
   // If AUTH_TOKEN is not set, skip auth (backward compat)
   if (!AUTH_TOKEN) return next();
   

@@ -494,8 +494,18 @@
       let pHtml = '';
       if (d.proxyStatus) {
         const ps = d.proxyStatus;
-        pHtml += '<p class="' + (ps.totalProxies > 0 ? 'text-green' : 'text-red') + '">' + (ps.totalProxies > 0 ? '✅ ' + ps.totalProxies + ' proxies loaded' : '❌ No proxies (datacenter IP exposed!)') + '</p>';
-        if (ps.activeAssignments > 0) pHtml += '<p class="text-dim">' + ps.activeAssignments + ' active proxy assignments</p>';
+        if (ps.totalProxies > 0) {
+          pHtml += '<p class="text-green">✅ ' + ps.totalProxies + ' proxies loaded</p>';
+          pHtml += '<p class="text-dim">' + ps.activeAssignments + ' active assignments</p>';
+          ps.proxyList.forEach(p => { pHtml += '<p class="text-dim" style="font-size:11px;word-break:break-all">' + p + '</p>'; });
+        } else {
+          pHtml += '<p class="text-red">❌ No proxies configured — GrubHub WILL block datacenter IP!</p>';
+          pHtml += '<p class="text-dim" style="font-size:11px">Set PROXY_URLS in Railway Variables:</p>';
+          pHtml += '<p class="text-dim" style="font-size:11px">socks5://user:pass@ip:port  OR  http://user:pass@ip:port</p>';
+          pHtml += '<p class="text-dim" style="font-size:11px">Separate multiple proxies with commas.</p>';
+        }
+      } else {
+        pHtml += '<p class="text-red">❌ No proxy data from server</p>';
       }
       document.getElementById('proxyInfo').innerHTML = pHtml || '<p class="text-dim">No proxy data</p>';
     }

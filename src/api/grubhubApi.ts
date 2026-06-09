@@ -180,31 +180,59 @@ export interface Block {
 let serverTimeOffset = 0; // Tracks difference between local time and GH server time
 
 // Build headers for GH API
+// Build headers for GH API — auto-detects iOS vs Android from stored capturedHeaders
 export function buildHeaders(email: string, accessToken: string): Record<string, string> {
   const p = getDeviceProfile(email);
-  const ua = `GrubHub_Driver_Android/${APP_VERSION} (${p.brand} ${p.model}; Android ${p.os}; API ${p.api})`;
-  
-  // Spoof NYC Coordinates for realism (e.g. Times Square area)
-  const lat = (40.7580 + (Math.random() * 0.01 - 0.005)).toFixed(6);
-  const lon = (-73.9855 + (Math.random() * 0.01 - 0.005)).toFixed(6);
 
-  return {
+  // Check if this account was sniffed from an iOS device
+  const acc = DB.getAccount(email);
+  const captured = acc?.captured_headers ? (() => { try { return JSON.parse(acc.captured_headers); } catch { return null; } })() : null;
+  const isIOS = captured?.userAgent?.includes('iPhone') || captured?.userAgent?.includes('iOS') ||
+                captured?.clientId?.includes('ios') || false;
+
+  let ua: string;
+  let clientId: string;
+  let deviceId: string;
+
+  if (isIOS) {
+    // Use real iOS fingerprint from sniffed data
+    ua = captured?.userAgent || `GHDelivery/5.34 (iPhone; iOS 17.5.1; Scale/3.00)`;
+    clientId = captured?.clientId || 'grubhubfordrivers_ios_66f21bdb1199';
+    deviceId = captured?.deviceId || p.deviceId;
+  } else {
+    // Android fingerprint
+    ua = `GrubHub_Driver_Android/${APP_VERSION} (${p.brand} ${p.model}; Android ${p.os}; API ${p.api})`;
+    clientId = CLIENT_ID;
+    deviceId = p.deviceId;
+  }
+
+  // Spoof NYC Coordinates (Queens 11417 area — user's target zone)
+  const lat = (40.6782 + (Math.random() * 0.02 - 0.01)).toFixed(6);  // Queens lat
+  const lon = (-73.8317 + (Math.random() * 0.02 - 0.01)).toFixed(6); // Queens lon
+
+  const headers: Record<string, string> = {
     'Authorization': `Bearer ${accessToken}`,
     'User-Agent': ua,
     'Content-Type': 'application/json',
     'Accept': 'application/json',
     'x-px-authorization': '3:' + p.pxSeed.substring(0, 40),
     'x-px-original-token': '3:' + p.pxUuid,
-    'x-device-id': p.deviceId,
-    'x-app-version': APP_VERSION,
-    'x-client-identifier': CLIENT_ID,
+    'x-device-id': deviceId,
+    'x-app-version': isIOS ? '5.34' : APP_VERSION,
+    'x-client-identifier': clientId,
     'x-locale': 'en-US',
-    'X-GH-Location': `${lat},${lon}`, // Geo-spoofing
-    'X-Network-Type': 'WIFI', // Bypass mobile connection throttles
-    'X-Requested-With': 'com.grubhub.driver', // Critical Android stealth header
-    'X-Android-Package': 'com.grubhub.driver',
+    'X-GH-Location': `${lat},${lon}`,
+    'X-Network-Type': 'WIFI',
     'Accept-Language': 'en-US,en;q=0.9',
   };
+
+  // iOS-specific headers (no Android headers for iOS accounts)
+  if (!isIOS) {
+    headers['X-Requested-With'] = 'com.grubhub.driver';
+    headers['X-Android-Package'] = 'com.grubhub.driver';
+  }
+
+  return headers;
 }
 
 // Intercept responses to calculate Time Drift from GH Servers

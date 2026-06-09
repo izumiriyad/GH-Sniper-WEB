@@ -111,6 +111,8 @@
           <input type="email" id="addEmail" placeholder="GH Driver Email">
           <input type="text" id="addToken" placeholder="Bearer Access Token (from Storm Sniffer)">
           <input type="text" id="addRefresh" placeholder="Refresh Token (for 24/7 auto-renew)">
+          <input type="text" id="addDeviceId" placeholder="Device ID (optional — from sniff data)" style="font-size:12px">
+          <input type="text" id="addUserAgent" placeholder="User-Agent (optional — paste from sniff to auto-detect iOS/Android)" style="font-size:12px">
           <button class="btn-primary" onclick="addAccount()">Add Account</button>
           <p class="text-dim mt-8">Paste Bearer token from Storm Sniffer / HTTP Canary. Refresh token enables auto-renew for weeks.</p>
         </div>
@@ -324,9 +326,23 @@
       const email = document.getElementById('addEmail').value.trim();
       const token = document.getElementById('addToken').value.trim();
       const refresh = document.getElementById('addRefresh').value.trim();
+      const deviceId = document.getElementById('addDeviceId').value.trim();
+      const userAgent = document.getElementById('addUserAgent').value.trim();
       if (!email || !token) return alert('Email and token required');
-      await api('POST', '/api/accounts', { email, accessToken: token, refreshToken: refresh });
-      document.getElementById('addEmail').value = ''; document.getElementById('addToken').value = ''; document.getElementById('addRefresh').value = '';
+      // Build capturedHeaders from sniff data if provided
+      let capturedHeaders = null;
+      if (userAgent || deviceId) {
+        const isIOS = userAgent.includes('iPhone') || userAgent.includes('iOS');
+        capturedHeaders = JSON.stringify({
+          userAgent: userAgent || (isIOS ? 'GHDelivery/5.34 (iPhone; iOS 17.5.1; Scale/3.00)' : ''),
+          deviceId: deviceId || '',
+          clientId: isIOS ? 'grubhubfordrivers_ios_66f21bdb1199' : 'grubhubfordrivers_android_ff790a1b3307',
+          platform: isIOS ? 'ios' : 'android'
+        });
+      }
+      const r = await api('POST', '/api/accounts', { email, accessToken: token, refreshToken: refresh, capturedHeaders });
+      if (r.error) { alert('Error: ' + r.error); return; }
+      document.getElementById('addEmail').value = ''; document.getElementById('addToken').value = ''; document.getElementById('addRefresh').value = ''; document.getElementById('addDeviceId').value = ''; document.getElementById('addUserAgent').value = '';
       loadAccounts();
     }
 

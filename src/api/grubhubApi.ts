@@ -386,16 +386,29 @@ export async function pickupBlock(email: string, blockId: string): Promise<{ suc
   return { success: res.status === 200, status: res.status, detail: res.raw };
 }
 
+
 export async function refreshToken(email: string): Promise<boolean> {
   const acc = DB.getAccount(email);
-  if (!acc?.refresh_token) return false;
+  if (!acc?.refresh_token) {
+    console.log('[TokenRefresh] No refresh_token for ' + email + ' — cannot auto-renew!');
+    return false;
+  }
+
+  // 🔥 CRITICAL: Detect iOS vs Android — use matching client_id for refresh
+  // iOS token refreshed with Android client_id → GrubHub rejects → session expires!
+  const captured = acc?.captured_headers ? (() => { try { return JSON.parse(acc.captured_headers); } catch { return null; } })() : null;
+  const isIOS = captured?.platform === 'ios' || captured?.clientId?.includes('ios') || captured?.userAgent?.includes('iPhone') || false;
+  const clientIdToUse = isIOS ? (captured?.clientId || 'grubhubfordrivers_ios_66f21bdb1199') : CLIENT_ID;
+
+  console.log('[TokenRefresh] Refreshing ' + email + ' (platform: ' + (isIOS ? 'iOS' : 'Android') + ', client_id: ' + clientIdToUse + ')');
+
   const headers = buildHeaders(email, acc.access_token || '');
   try {
     const proxyA = getProxyAgent(email);
     const res = await authClient.post('/security/oauth2/token', new URLSearchParams({
       grant_type: 'refresh_token',
       refresh_token: acc.refresh_token,
-      client_id: CLIENT_ID,
+      client_id: clientIdToUse,  // ← correct platform client_id
       scope: 'logistics:driver',
     }).toString(), {
       headers: { ...headers, 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -404,14 +417,21 @@ export async function refreshToken(email: string): Promise<boolean> {
       httpsAgent: proxyA,
       httpAgent: proxyA,
     });
+
     if (res.status === 200 && res.data?.access_token) {
       const expiresAt = Date.now() + (res.data.expires_in || 3600) * 1000;
-      DB.updateTokens(email, res.data.access_token, res.data.refresh_token || acc.refresh_token, expiresAt);
+      // Always update refresh_token too — keeps the 30-day chain alive
+      const newRefresh = res.data.refresh_token || acc.refresh_token;
+      DB.updateTokens(email, res.data.access_token, newRefresh, expiresAt);
       DB.updateStatus(email, 'active');
-      DB.addLog(email, 'TOKEN_REFRESH', undefined, 'ok', 'Token refreshed');
+      DB.addLog(email, 'TOKEN_REFRESH', undefined, 'ok', 'Token refreshed via ' + (isIOS ? 'iOS' : 'Android') + ' client_id');
+      console.log('[TokenRefresh] ✅ ' + email + ' refreshed. Expires in ' + Math.round((res.data.expires_in || 3600) / 60) + 'min');
       return true;
     }
-    DB.addLog(email, 'TOKEN_REFRESH_FAIL', undefined, 'fail', 'HTTP ' + res.status + ': ' + errorDetail(res), res.status);
+
+    const detail = errorDetail(res);
+    console.log('[TokenRefresh] ❌ FAILED for ' + email + ' HTTP ' + res.status + ': ' + detail);
+    DB.addLog(email, 'TOKEN_REFRESH_FAIL', undefined, 'fail', 'HTTP ' + res.status + ': ' + detail, res.status);
     return false;
   } catch (e: any) {
     DB.addLog(email, 'TOKEN_REFRESH_ERROR', undefined, 'error', e.message);
@@ -419,11 +439,14 @@ export async function refreshToken(email: string): Promise<boolean> {
   }
 }
 
+
 export function isTokenExpiring(email: string): boolean {
   const acc = DB.getAccount(email);
   if (!acc) return true;
-  return acc.token_expires_at < Date.now() + 300000; // 5 min buffer
+  // 🔥 15 min buffer — refresh BEFORE expiry, not after (was 5 min which caused race conditions)
+  return acc.token_expires_at < Date.now() + 900000; // 15 min buffer
 }
+
 
 // ══ INLINE RATE-LIMIT TRACKER (avoids circular import with nycIntelligence) ══
 const rateLimitState = new Map<string, { count: number; resetAt: number; blocked: boolean }>();
@@ -680,8 +703,8 @@ export async function continuousPickup(
   while (!shouldStop()) {
     cycles++;
     try {
-      // Auto-refresh every 100 cycles
-      if (cycles % 100 === 0 && isTokenExpiring(email)) {
+      // Auto-refresh every 50 cycles (~15s at 300ms) — catch expiry well before it happens
+      if (cycles % 50 === 0 && isTokenExpiring(email)) {
         log('Refreshing token at cycle ' + cycles);
         await refreshToken(email);
       }
